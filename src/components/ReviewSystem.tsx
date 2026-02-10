@@ -24,6 +24,9 @@ interface ReviewSystemProps {
   onNavigateToSubject: (subjectId: string) => void;
 }
 
+const VISIBLE_COUNT_OPTIONS = [10, 20, 30] as const;
+type VisibleCount = (typeof VISIBLE_COUNT_OPTIONS)[number];
+
 function formatPercent(v: number) {
   return `${Math.round(v * 100)}%`;
 }
@@ -70,18 +73,35 @@ export function ReviewSystem({
     return formatWeightsForInput(normalized.customWeights ?? getDefaultWeights(normalized.version));
   });
   const [weightsError, setWeightsError] = useState<string | null>(null);
+  const [upcomingVisibleCount, setUpcomingVisibleCount] = useState<VisibleCount>(() => {
+    const stored = Number(window.localStorage.getItem('reviews_upcoming_visible_count'));
+    return VISIBLE_COUNT_OPTIONS.includes(stored as VisibleCount) ? (stored as VisibleCount) : 10;
+  });
+  const [activeTopicsVisibleCount, setActiveTopicsVisibleCount] = useState<VisibleCount>(() => {
+    const stored = Number(window.localStorage.getItem('reviews_active_visible_count'));
+    return VISIBLE_COUNT_OPTIONS.includes(stored as VisibleCount) ? (stored as VisibleCount) : 10;
+  });
 
   const reviewsDue = getReviewsDue(subjects);
-  const upcomingReviews = getUpcomingReviews(subjects, 15);
+  const upcomingReviewsAll = getUpcomingReviews(subjects, 500);
+  const upcomingReviews = upcomingReviewsAll.slice(0, upcomingVisibleCount);
 
   // Count totals
   const totalWithReviews = subjects.reduce((sum, s) =>
     sum + getAllTopics(s).filter(t => t.reviewHistory.length > 0).length, 0
   );
   const totalDue = reviewsDue.length;
-  const totalUpcoming = upcomingReviews.length;
+  const totalUpcoming = upcomingReviewsAll.length;
   const currentFsrsConfig = normalizeFSRSConfig(fsrsConfig);
   const retentionPercent = Math.round(currentFsrsConfig.requestedRetention * 100);
+
+  useEffect(() => {
+    window.localStorage.setItem('reviews_upcoming_visible_count', String(upcomingVisibleCount));
+  }, [upcomingVisibleCount]);
+
+  useEffect(() => {
+    window.localStorage.setItem('reviews_active_visible_count', String(activeTopicsVisibleCount));
+  }, [activeTopicsVisibleCount]);
 
   useEffect(() => {
     const normalized = normalizeFSRSConfig(fsrsConfig);
@@ -488,9 +508,23 @@ export function ReviewSystem({
       {/* Upcoming Reviews */}
       {totalUpcoming > 0 && (
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-          <div className="px-5 py-3 bg-blue-50 border-b border-blue-200 flex items-center gap-2">
-            <Calendar size={18} className="text-blue-600" />
-            <h2 className="font-bold text-blue-700">Proximas Revisoes</h2>
+          <div className="px-5 py-3 bg-blue-50 border-b border-blue-200 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Calendar size={18} className="text-blue-600" />
+              <h2 className="font-bold text-blue-700">Proximas Revisoes</h2>
+            </div>
+            <div className="flex items-center gap-2 text-xs text-blue-700">
+              <span>Mostrar:</span>
+              <select
+                value={upcomingVisibleCount}
+                onChange={event => setUpcomingVisibleCount(Number(event.target.value) as VisibleCount)}
+                className="rounded-md border border-blue-200 bg-white px-2 py-1 text-xs"
+              >
+                {VISIBLE_COUNT_OPTIONS.map(option => (
+                  <option key={`upcoming-${option}`} value={option}>{option}</option>
+                ))}
+              </select>
+            </div>
           </div>
           <div className="divide-y divide-gray-100">
             {upcomingReviews.map(item => {
@@ -523,9 +557,23 @@ export function ReviewSystem({
 
       {/* All Topics with FSRS Data */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-        <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center gap-2">
-          <TrendingUp size={18} className="text-gray-600" />
-          <h2 className="font-bold text-gray-700">Assuntos com Revisao Ativa</h2>
+        <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <TrendingUp size={18} className="text-gray-600" />
+            <h2 className="font-bold text-gray-700">Assuntos com Revisao Ativa</h2>
+          </div>
+          <div className="flex items-center gap-2 text-xs text-gray-600">
+            <span>Mostrar:</span>
+            <select
+              value={activeTopicsVisibleCount}
+              onChange={event => setActiveTopicsVisibleCount(Number(event.target.value) as VisibleCount)}
+              className="rounded-md border border-gray-300 bg-white px-2 py-1 text-xs"
+            >
+              {VISIBLE_COUNT_OPTIONS.map(option => (
+                <option key={`active-${option}`} value={option}>{option}</option>
+              ))}
+            </select>
+          </div>
         </div>
         {totalWithReviews === 0 ? (
           <div className="p-8 text-center">
@@ -537,9 +585,14 @@ export function ReviewSystem({
           </div>
         ) : (
           <div className="divide-y divide-gray-100">
-            {subjects.map(subject => {
+            {(() => {
+              let renderedCount = 0;
+              return subjects.map(subject => {
               const topicsWithReview = getAllTopics(subject).filter(t => t.reviewHistory.length > 0);
-              if (topicsWithReview.length === 0) return null;
+              if (topicsWithReview.length === 0 || renderedCount >= activeTopicsVisibleCount) return null;
+              const remaining = activeTopicsVisibleCount - renderedCount;
+              const visibleTopics = topicsWithReview.slice(0, remaining);
+              renderedCount += visibleTopics.length;
               return (
                 <div key={subject.id}>
                   <div
@@ -548,10 +601,10 @@ export function ReviewSystem({
                   >
                     <span>{subject.emoji}</span>
                     <span className="text-sm font-bold" style={{ color: subject.color }}>{subject.name}</span>
-                    <span className="text-xs text-gray-400 ml-1">({topicsWithReview.length} assuntos)</span>
+                    <span className="text-xs text-gray-400 ml-1">({visibleTopics.length}/{topicsWithReview.length} assuntos)</span>
                     <ArrowRight size={14} className="text-gray-300 ml-auto" />
                   </div>
-                  {topicsWithReview.map(topic => {
+                  {visibleTopics.map(topic => {
                     const status = getReviewStatus(topic.fsrsNextReview);
                     const diffLabel = getDifficultyLabel(topic.fsrsDifficulty);
                     const historyExpanded2 = expandedHistory.has('all-' + topic.id);
@@ -604,7 +657,8 @@ export function ReviewSystem({
                   })}
                 </div>
               );
-            })}
+              });
+            })()}
           </div>
         )}
       </div>

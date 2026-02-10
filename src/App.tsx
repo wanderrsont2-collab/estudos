@@ -1,72 +1,505 @@
-﻿import { useState, useCallback, useEffect } from 'react';
-import { loadData, saveData, getSubjectStats, getAllTopics, getDeadlineInfo, getReviewsDue } from './store';
-import { StudyData, Subject } from './types';
+﻿import { useState, useCallback, useEffect, useMemo, useRef, type FormEvent, type MouseEvent as ReactMouseEvent } from 'react';
+import { loadData, saveData, getSubjectStats, getAllTopics, getDeadlineInfo, getReviewsDue, generateId } from './store';
+import { StudyData, Subject, WeeklySchedule, EssayMonitorSettings } from './types';
 import { type FSRSConfig, normalizeFSRSConfig } from './fsrs';
 import { Overview } from './components/Overview';
 import { SubjectDetail } from './components/SubjectDetail';
 import { ReviewSystem } from './components/ReviewSystem';
-import { BookOpen, LayoutDashboard, Brain } from 'lucide-react';
+import { EssayMonitor } from './components/EssayMonitor';
+import { BookOpen, LayoutDashboard, Brain, Moon, Plus, Pencil, Search, Sun, Trash2, Undo2, X, FileText } from 'lucide-react';
 
-type View = 'overview' | 'subject' | 'reviews';
+type View = 'overview' | 'subject' | 'reviews' | 'essays';
+
+const SUBJECT_COLOR_PALETTE = [
+  '#1565c0', '#2e7d32', '#e65100', '#6a1b9a',
+  '#5d4037', '#00695c', '#00838f', '#c62828',
+  '#283593', '#37474f',
+] as const;
+
+const SUBJECT_EMOJI_PALETTE = [
+  '\u{1F4DA}', '\u{1F4D8}', '\u{1F9EA}', '\u{1F9EC}',
+  '\u{1F30D}', '\u{1F4D0}', '\u{1F4DC}', '\u{1F4CC}',
+] as const;
+
+const BACKUPS_STORAGE_KEY = 'enem2025_backups_v1';
+const BACKUP_SCHEMA_VERSION = 'study-data-v1';
+const MAX_BACKUPS = 20;
+
+interface BackupEntry {
+  id: string;
+  createdAt: string;
+  reason: 'auto' | 'manual';
+  schemaVersion: string;
+  data: StudyData;
+}
+
+interface UndoEntry {
+  id: string;
+  label: string;
+  snapshot: StudyData;
+  createdAt: string;
+}
+
+interface ConfirmDialogState {
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  tone?: 'danger' | 'default';
+  onConfirm: () => void;
+}
+
+interface RenameSubjectState {
+  subjectId: string;
+  value: string;
+  error: string | null;
+}
+
+interface ToastItem {
+  id: string;
+  message: string;
+  tone: 'success' | 'info' | 'error';
+}
+
+interface SearchResultItem {
+  id: string;
+  subjectId: string;
+  title: string;
+  subtitle: string;
+  type: 'subject' | 'topic';
+}
+
+function toColorLight(hexColor: string): string {
+  const match = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hexColor);
+  if (!match) return '#f3f4f6';
+  const [r, g, b] = [match[1], match[2], match[3]].map(v => parseInt(v, 16));
+  return `rgba(${r}, ${g}, ${b}, 0.12)`;
+}
+
+function isValidHexColor(value: string): boolean {
+  return /^#[0-9a-f]{6}$/i.test(value);
+}
+
+interface SubjectContextMenuState {
+  subjectId: string;
+  x: number;
+  y: number;
+}
+
+function cloneStudyData(data: StudyData): StudyData {
+  return JSON.parse(JSON.stringify(data)) as StudyData;
+}
+
+function loadBackups(): BackupEntry[] {
+  try {
+    const raw = window.localStorage.getItem(BACKUPS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as BackupEntry[];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(item => item && item.schemaVersion === BACKUP_SCHEMA_VERSION);
+  } catch {
+    return [];
+  }
+}
 
 export function App() {
   const [data, setData] = useState<StudyData>(() => loadData());
   const [view, setView] = useState<View>('overview');
   const [selectedSubjectId, setSelectedSubjectId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    const stored = window.localStorage.getItem('enem_theme');
+    if (stored === 'dark' || stored === 'light') {
+      return stored;
+    }
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  });
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [undoStack, setUndoStack] = useState<UndoEntry[]>([]);
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
+  const [renameSubjectState, setRenameSubjectState] = useState<RenameSubjectState | null>(null);
+  const [newSubjectError, setNewSubjectError] = useState<string | null>(null);
+  const [backups, setBackups] = useState<BackupEntry[]>(() => loadBackups());
+  const [selectedBackupId, setSelectedBackupId] = useState<string>('');
+  const [globalSearchQuery, setGlobalSearchQuery] = useState('');
+
+  const [subjectContextMenu, setSubjectContextMenu] = useState<SubjectContextMenuState | null>(null);
+  const [isCreateSubjectOpen, setIsCreateSubjectOpen] = useState(false);
+  const [newSubjectName, setNewSubjectName] = useState('');
+  const [newSubjectEmoji, setNewSubjectEmoji] = useState('\u{1F4DA}');
+  const [newSubjectColor, setNewSubjectColor] = useState<string>('#1565c0');
+  const lastBackupHashRef = useRef('');
+  const globalSearchRef = useRef<HTMLInputElement | null>(null);
+
+  function pushToast(message: string, tone: ToastItem['tone'] = 'info') {
+    setToasts(prev => [
+      ...prev,
+      { id: `toast_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, message, tone },
+    ]);
+  }
+
+  function applyDataChange(label: string, updater: (prev: StudyData) => StudyData) {
+    setData(prev => {
+      const next = updater(prev);
+      if (next === prev) return prev;
+      setUndoStack(stack => [
+        ...stack.slice(-29),
+        {
+          id: `undo_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          label,
+          snapshot: cloneStudyData(prev),
+          createdAt: new Date().toISOString(),
+        },
+      ]);
+      return { ...next, lastUpdated: new Date().toISOString() };
+    });
+  }
+
+  function persistBackups(next: BackupEntry[]) {
+    setBackups(next);
+    window.localStorage.setItem(BACKUPS_STORAGE_KEY, JSON.stringify(next));
+  }
+
+  function createBackup(reason: 'auto' | 'manual') {
+    const snapshot = cloneStudyData(data);
+    const hash = JSON.stringify(snapshot);
+    if (reason === 'auto' && hash === lastBackupHashRef.current) return;
+
+    const entry: BackupEntry = {
+      id: `backup_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+      createdAt: new Date().toISOString(),
+      reason,
+      schemaVersion: BACKUP_SCHEMA_VERSION,
+      data: snapshot,
+    };
+
+    const next = [entry, ...backups].slice(0, MAX_BACKUPS);
+    persistBackups(next);
+    lastBackupHashRef.current = hash;
+    if (reason === 'manual') {
+      pushToast('Backup manual criado com sucesso.', 'success');
+    }
+  }
 
   useEffect(() => {
     saveData(data);
   }, [data]);
 
+  useEffect(() => {
+    if (toasts.length === 0) return;
+    const timer = window.setTimeout(() => {
+      setToasts(prev => prev.slice(1));
+    }, 3200);
+    return () => window.clearTimeout(timer);
+  }, [toasts]);
+
+  useEffect(() => {
+    const isDark = theme === 'dark';
+    document.documentElement.classList.toggle('dark', isDark);
+    window.localStorage.setItem('enem_theme', theme);
+  }, [theme]);
+
+  useEffect(() => {
+    if (!subjectContextMenu) return;
+
+    function closeMenu() {
+      setSubjectContextMenu(null);
+    }
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') closeMenu();
+    }
+
+    window.addEventListener('click', closeMenu);
+    window.addEventListener('scroll', closeMenu, true);
+    window.addEventListener('keydown', onKeyDown);
+
+    return () => {
+      window.removeEventListener('click', closeMenu);
+      window.removeEventListener('scroll', closeMenu, true);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [subjectContextMenu]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      createBackup('auto');
+    }, 120000);
+    return () => window.clearTimeout(timer);
+  }, [data]); // backup automatico apos 2 min sem novas mudancas
+
+  useEffect(() => {
+    if (selectedBackupId && !backups.some(item => item.id === selectedBackupId)) {
+      setSelectedBackupId('');
+    }
+  }, [backups, selectedBackupId]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        globalSearchRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
   const updateSubject = useCallback(
     (updated: Subject) => {
-      setData(prev => ({
+      applyDataChange('Atualizacao de disciplina', prev => ({
         ...prev,
         subjects: prev.subjects.map(s => (s.id === updated.id ? updated : s)),
-        lastUpdated: new Date().toISOString(),
       }));
     },
     []
   );
 
   const updateFsrsConfig = useCallback((nextConfig: FSRSConfig) => {
-    setData(prev => ({
+    applyDataChange('Configuracao FSRS', prev => ({
       ...prev,
       settings: {
         ...prev.settings,
         fsrs: normalizeFSRSConfig(nextConfig),
       },
-      lastUpdated: new Date().toISOString(),
+    }));
+  }, []);
+
+  const updateSchedule = useCallback((nextSchedule: WeeklySchedule) => {
+    applyDataChange('Atualizacao do cronograma', prev => ({
+      ...prev,
+      settings: {
+        ...prev.settings,
+        schedule: nextSchedule,
+      },
+    }));
+  }, []);
+
+  const updateEssayMonitor = useCallback((nextEssayMonitor: EssayMonitorSettings) => {
+    applyDataChange('Monitor de redacoes', prev => ({
+      ...prev,
+      settings: {
+        ...prev.settings,
+        essayMonitor: nextEssayMonitor,
+      },
     }));
   }, []);
 
   const selectedSubject = data.subjects.find(s => s.id === selectedSubjectId) || null;
   const reviewsDueCount = getReviewsDue(data.subjects).length;
+  const contextMenuSubject = subjectContextMenu
+    ? data.subjects.find(s => s.id === subjectContextMenu.subjectId) || null
+    : null;
+  const globalSearchResults = useMemo(() => {
+    const query = globalSearchQuery.trim().toLowerCase();
+    if (query.length < 2) return [] as SearchResultItem[];
+
+    const results: SearchResultItem[] = [];
+    for (const subject of data.subjects) {
+      if (subject.name.toLowerCase().includes(query)) {
+        results.push({
+          id: `subject-${subject.id}`,
+          subjectId: subject.id,
+          title: `${subject.emoji} ${subject.name}`,
+          subtitle: 'Disciplina',
+          type: 'subject',
+        });
+      }
+      for (const group of subject.topicGroups) {
+        for (const topic of group.topics) {
+          if (topic.name.toLowerCase().includes(query)) {
+            results.push({
+              id: `topic-${topic.id}`,
+              subjectId: subject.id,
+              title: `${subject.emoji} ${topic.name}`,
+              subtitle: `${subject.name} -> ${group.name}`,
+              type: 'topic',
+            });
+          }
+        }
+      }
+    }
+
+    return results.slice(0, 30);
+  }, [data.subjects, globalSearchQuery]);
 
   function navigateToSubject(id: string) {
     setSelectedSubjectId(id);
     setView('subject');
     setSidebarOpen(false);
+    setSubjectContextMenu(null);
+    setGlobalSearchQuery('');
   }
 
   function navigateToOverview() {
     setSelectedSubjectId(null);
     setView('overview');
     setSidebarOpen(false);
+    setSubjectContextMenu(null);
   }
 
   function navigateToReviews() {
     setView('reviews');
     setSelectedSubjectId(null);
     setSidebarOpen(false);
+    setSubjectContextMenu(null);
   }
 
+  function navigateToEssays() {
+    setView('essays');
+    setSelectedSubjectId(null);
+    setSidebarOpen(false);
+    setSubjectContextMenu(null);
+  }
+
+  function toggleTheme() {
+    setTheme(prev => (prev === 'dark' ? 'light' : 'dark'));
+  }
+
+  function openCreateSubjectModal() {
+    const randomColor = SUBJECT_COLOR_PALETTE[Math.floor(Math.random() * SUBJECT_COLOR_PALETTE.length)];
+    const randomEmoji = SUBJECT_EMOJI_PALETTE[Math.floor(Math.random() * SUBJECT_EMOJI_PALETTE.length)];
+    setNewSubjectName('');
+    setNewSubjectEmoji(randomEmoji);
+    setNewSubjectColor(randomColor);
+    setNewSubjectError(null);
+    setIsCreateSubjectOpen(true);
+    setSubjectContextMenu(null);
+  }
+
+  function closeCreateSubjectModal() {
+    setIsCreateSubjectOpen(false);
+  }
+
+  function handleCreateSubject(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const trimmedName = newSubjectName.trim();
+    if (!trimmedName) {
+      setNewSubjectError('Informe um nome para a disciplina.');
+      return;
+    }
+    setNewSubjectError(null);
+
+    const finalColor = isValidHexColor(newSubjectColor) ? newSubjectColor : '#1565c0';
+    const finalEmoji = newSubjectEmoji.trim() || '\u{1F4DA}';
+
+    const newSubject: Subject = {
+      id: `subject_${generateId()}`,
+      name: trimmedName,
+      emoji: finalEmoji,
+      color: finalColor,
+      colorLight: toColorLight(finalColor),
+      topicGroups: [],
+    };
+
+    applyDataChange('Criacao de disciplina', prev => ({
+      ...prev,
+      subjects: [...prev.subjects, newSubject],
+    }));
+    pushToast('Disciplina criada com sucesso.', 'success');
+
+    setIsCreateSubjectOpen(false);
+    navigateToSubject(newSubject.id);
+  }
+
+  function openSubjectContextMenu(event: ReactMouseEvent<HTMLButtonElement>, subjectId: string) {
+    event.preventDefault();
+    event.stopPropagation();
+    setSubjectContextMenu({ subjectId, x: event.clientX, y: event.clientY });
+  }
+
+  function startRenameSubject(subjectId: string) {
+    const subject = data.subjects.find(s => s.id === subjectId);
+    if (!subject) return;
+    setRenameSubjectState({
+      subjectId,
+      value: subject.name,
+      error: null,
+    });
+    setSubjectContextMenu(null);
+  }
+
+  function saveRenameSubject() {
+    if (!renameSubjectState) return;
+    const trimmedName = renameSubjectState.value.trim();
+    if (!trimmedName) {
+      setRenameSubjectState(prev => (prev ? { ...prev, error: 'O nome da disciplina nao pode ficar vazio.' } : prev));
+      return;
+    }
+    const subject = data.subjects.find(s => s.id === renameSubjectState.subjectId);
+    if (!subject) return;
+    updateSubject({ ...subject, name: trimmedName });
+    setRenameSubjectState(null);
+    pushToast('Disciplina renomeada com sucesso.', 'success');
+  }
+
+  function deleteSubject(subjectId: string) {
+    const subject = data.subjects.find(s => s.id === subjectId);
+    if (!subject) return;
+    setConfirmDialog({
+      title: 'Excluir disciplina',
+      message: `Deseja realmente deletar a disciplina "${subject.name}"?`,
+      confirmLabel: 'Excluir',
+      tone: 'danger',
+      onConfirm: () => {
+        applyDataChange('Exclusao de disciplina', prev => ({
+          ...prev,
+          subjects: prev.subjects.filter(s => s.id !== subjectId),
+        }));
+        if (selectedSubjectId === subjectId) {
+          setSelectedSubjectId(null);
+          setView('overview');
+        }
+        pushToast(`Disciplina "${subject.name}" excluida.`, 'info');
+      },
+    });
+    setSubjectContextMenu(null);
+  }
+
+  function undoLastChange() {
+    setUndoStack(prev => {
+      const last = prev[prev.length - 1];
+      if (!last) return prev;
+      setData(cloneStudyData(last.snapshot));
+      pushToast(`Desfeito: ${last.label}`, 'info');
+      return prev.slice(0, -1);
+    });
+  }
+
+  function restoreBackup(backupId: string) {
+    const backup = backups.find(item => item.id === backupId);
+    if (!backup) return;
+    setConfirmDialog({
+      title: 'Restaurar backup',
+      message: `Restaurar backup de ${new Date(backup.createdAt).toLocaleString('pt-BR')}?`,
+      confirmLabel: 'Restaurar',
+      onConfirm: () => {
+        setUndoStack(prev => [
+          ...prev.slice(-29),
+          {
+            id: `undo_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            label: 'Restauracao de backup',
+            snapshot: cloneStudyData(data),
+            createdAt: new Date().toISOString(),
+          },
+        ]);
+        setData(cloneStudyData(backup.data));
+        pushToast('Backup restaurado com sucesso.', 'success');
+      },
+    });
+  }
+
+  const contextMenuPosition = subjectContextMenu
+    ? {
+        left: Math.max(8, Math.min(subjectContextMenu.x, window.innerWidth - 176)),
+        top: Math.max(8, Math.min(subjectContextMenu.y, window.innerHeight - 96)),
+      }
+    : null;
+
   return (
-    <div className="min-h-screen bg-gray-50 font-['Inter',sans-serif]">
+    <div className="min-h-screen bg-gray-50 dark:bg-slate-950 text-gray-900 dark:text-slate-100 font-['Inter',sans-serif] transition-colors">
       {/* Top Navigation */}
-      <nav className="bg-[#1a237e] text-white shadow-lg sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+      <nav className="bg-[#1a237e] dark:bg-slate-900 text-white shadow-lg sticky top-0 z-50 border-b border-transparent dark:border-slate-700">
+        <div className="w-full px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <button
               onClick={() => setSidebarOpen(!sidebarOpen)}
@@ -81,6 +514,49 @@ export function App() {
             </h1>
           </div>
           <div className="flex items-center gap-2">
+            <div className="relative hidden md:block">
+              <div className="flex items-center gap-2 rounded-lg bg-white/10 border border-white/20 px-2 py-1.5">
+                <Search size={14} className="text-white/80" />
+                <input
+                  ref={globalSearchRef}
+                  value={globalSearchQuery}
+                  onChange={event => setGlobalSearchQuery(event.target.value)}
+                  placeholder="Buscar assunto... (Ctrl+K)"
+                  className="w-64 bg-transparent text-sm text-white placeholder:text-white/70 outline-none"
+                />
+              </div>
+              {globalSearchResults.length > 0 && (
+                <div className="absolute top-full mt-1 w-full rounded-xl border border-slate-700 bg-slate-900/95 backdrop-blur-md shadow-2xl max-h-72 overflow-y-auto">
+                  {globalSearchResults.map(item => (
+                    <button
+                      key={item.id}
+                      onClick={() => navigateToSubject(item.subjectId)}
+                      className="w-full text-left px-3 py-2 hover:bg-white/10 transition-colors border-b border-white/5 last:border-b-0"
+                    >
+                      <p className="text-sm text-white font-medium truncate">{item.title}</p>
+                      <p className="text-[11px] text-slate-300 truncate">{item.subtitle}</p>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <button
+              onClick={undoLastChange}
+              disabled={undoStack.length === 0}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm bg-white/10 hover:bg-white/20 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              title="Desfazer ultima alteracao"
+            >
+              <Undo2 size={16} />
+              <span className="hidden sm:inline">Desfazer</span>
+            </button>
+            <button
+              onClick={toggleTheme}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm bg-white/10 hover:bg-white/20 transition-colors"
+              title={theme === 'dark' ? 'Ativar modo claro' : 'Ativar modo escuro'}
+            >
+              {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+              <span className="hidden sm:inline">{theme === 'dark' ? 'Claro' : 'Escuro'}</span>
+            </button>
             <button
               onClick={navigateToReviews}
               className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors relative ${
@@ -96,6 +572,15 @@ export function App() {
               )}
             </button>
             <button
+              onClick={navigateToEssays}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors ${
+                view === 'essays' ? 'bg-cyan-600 text-white' : 'bg-white/10 hover:bg-white/20'
+              }`}
+            >
+              <FileText size={16} />
+              <span className="hidden sm:inline">Monitor de Redacoes</span>
+            </button>
+            <button
               onClick={navigateToOverview}
               className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors ${
                 view === 'overview' ? 'bg-white/20' : 'bg-white/10 hover:bg-white/20'
@@ -108,10 +593,10 @@ export function App() {
         </div>
       </nav>
 
-      <div className="flex max-w-7xl mx-auto">
+      <div className="flex w-full">
         {/* Sidebar */}
         <aside
-          className={`fixed lg:static inset-y-0 left-0 z-40 w-64 bg-white shadow-lg lg:shadow-sm border-r border-gray-200 transform transition-transform duration-300 ease-in-out lg:transform-none ${
+          className={`fixed lg:static inset-y-0 left-0 z-40 w-64 bg-white dark:bg-slate-900 shadow-lg lg:shadow-sm border-r border-gray-200 dark:border-slate-700 transform transition-transform duration-300 ease-in-out lg:transform-none ${
             sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
           } pt-16 lg:pt-0 overflow-y-auto`}
         >
@@ -141,9 +626,36 @@ export function App() {
               )}
             </button>
 
-            <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3 px-2">
-              Disciplinas
-            </h2>
+            <button
+              onClick={navigateToEssays}
+              className={`w-full mb-4 px-3 py-2.5 rounded-xl flex items-center gap-3 transition-all text-sm ${
+                view === 'essays'
+                  ? 'bg-cyan-600 text-white shadow-md'
+                  : 'bg-cyan-50 text-cyan-700 hover:bg-cyan-100'
+              }`}
+            >
+              <FileText size={20} />
+              <div className="flex-1 text-left">
+                <p className="font-medium">Monitor de Redacoes</p>
+                <p className={`text-xs ${view === 'essays' ? 'text-cyan-100' : 'text-cyan-600'}`}>
+                  {data.settings.essayMonitor.essays.length} registrada(s)
+                </p>
+              </div>
+            </button>
+
+            <div className="flex items-center justify-between mb-3 px-2">
+              <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider">
+                Disciplinas
+              </h2>
+              <button
+                onClick={openCreateSubjectModal}
+                className="inline-flex items-center gap-1 rounded-md bg-blue-50 px-2 py-1 text-[11px] font-medium text-blue-700 hover:bg-blue-100 transition-colors"
+                title="Adicionar disciplina"
+              >
+                <Plus size={12} /> Nova
+              </button>
+            </div>
+
             <div className="space-y-1">
               {data.subjects.map(subject => {
                 const stats = getSubjectStats(subject);
@@ -166,6 +678,7 @@ export function App() {
                   <button
                     key={subject.id}
                     onClick={() => navigateToSubject(subject.id)}
+                    onContextMenu={(event) => openSubjectContextMenu(event, subject.id)}
                     className={`w-full text-left px-3 py-2.5 rounded-xl flex items-center gap-3 transition-all text-sm group ${
                       isActive
                         ? 'shadow-md text-white'
@@ -211,10 +724,38 @@ export function App() {
           </div>
 
           {/* Tips in sidebar */}
-          <div className="p-4 border-t border-gray-100">
-            <div className="bg-purple-50 rounded-xl p-3 text-xs text-purple-700">
+          <div className="p-4 border-t border-gray-100 dark:border-slate-700">
+            <div className="bg-purple-50 dark:bg-purple-900/25 rounded-xl p-3 text-xs text-purple-700 dark:text-purple-200">
               <p className="font-bold mb-1">{'\u{1F9E0}'} Dica FSRS</p>
               <p>Marque assuntos como estudados e inicie revisoes para otimizar sua retencao de conteudo!</p>
+            </div>
+            <div className="mt-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40 p-3 space-y-2">
+              <p className="text-xs font-semibold text-slate-600 dark:text-slate-300">Backups</p>
+              <button
+                onClick={() => createBackup('manual')}
+                className="w-full px-2.5 py-1.5 rounded-lg text-xs bg-emerald-600 text-white hover:bg-emerald-700"
+              >
+                Criar backup agora
+              </button>
+              <select
+                value={selectedBackupId}
+                onChange={event => setSelectedBackupId(event.target.value)}
+                className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-2 py-1.5 text-xs"
+              >
+                <option value="">Selecionar backup</option>
+                {backups.map(item => (
+                  <option key={item.id} value={item.id}>
+                    {new Date(item.createdAt).toLocaleString('pt-BR')} ({item.reason})
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={() => selectedBackupId && restoreBackup(selectedBackupId)}
+                disabled={!selectedBackupId}
+                className="w-full px-2.5 py-1.5 rounded-lg text-xs bg-slate-700 text-white hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Restaurar backup
+              </button>
             </div>
           </div>
         </aside>
@@ -228,7 +769,7 @@ export function App() {
         )}
 
         {/* Main Content */}
-        <main className="flex-1 p-4 md:p-6 lg:p-8 min-w-0">
+        <main className="flex-1 p-3 md:p-4 lg:p-5 min-w-0">
           {view === 'reviews' ? (
             <ReviewSystem
               subjects={data.subjects}
@@ -236,6 +777,11 @@ export function App() {
               onUpdateFsrsConfig={updateFsrsConfig}
               onUpdateSubject={updateSubject}
               onNavigateToSubject={navigateToSubject}
+            />
+          ) : view === 'essays' ? (
+            <EssayMonitor
+              settings={data.settings.essayMonitor}
+              onUpdateSettings={updateEssayMonitor}
             />
           ) : view === 'subject' && selectedSubject ? (
             <SubjectDetail
@@ -247,6 +793,8 @@ export function App() {
           ) : (
             <Overview
               subjects={data.subjects}
+              schedule={data.settings.schedule}
+              onUpdateSchedule={updateSchedule}
               onSelectSubject={navigateToSubject}
               onOpenReviews={navigateToReviews}
             />
@@ -254,9 +802,202 @@ export function App() {
         </main>
       </div>
 
+      {/* Subject Context Menu */}
+      {subjectContextMenu && contextMenuPosition && contextMenuSubject && (
+        <div
+          className="fixed z-[70] w-44 rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-lg py-1"
+          style={{ left: contextMenuPosition.left, top: contextMenuPosition.top }}
+          onClick={event => event.stopPropagation()}
+        >
+          <button
+            onClick={() => {
+              startRenameSubject(contextMenuSubject.id);
+              setSubjectContextMenu(null);
+            }}
+            className="w-full px-3 py-2 text-left text-sm text-gray-700 dark:text-slate-200 hover:bg-gray-50 dark:hover:bg-slate-800 flex items-center gap-2"
+          >
+            <Pencil size={14} /> Renomear
+          </button>
+          <button
+            onClick={() => {
+              deleteSubject(contextMenuSubject.id);
+              setSubjectContextMenu(null);
+            }}
+            className="w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
+          >
+            <Trash2 size={14} /> Deletar
+          </button>
+        </div>
+      )}
+
+      {/* Create Subject Modal */}
+      {isCreateSubjectOpen && (
+        <div className="fixed inset-0 z-[80] bg-black/40 flex items-center justify-center p-4">
+          <div className="w-full max-w-md rounded-xl bg-white dark:bg-slate-900 shadow-2xl border border-gray-200 dark:border-slate-700">
+            <div className="px-4 py-3 border-b border-gray-100 dark:border-slate-700 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-gray-800 dark:text-slate-100">Nova disciplina</h3>
+              <button
+                onClick={closeCreateSubjectModal}
+                className="p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-slate-800 text-gray-500 dark:text-slate-400"
+                aria-label="Fechar"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateSubject} className="p-4 space-y-3">
+              {newSubjectError && (
+                <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                  {newSubjectError}
+                </div>
+              )}
+              <div>
+                <label className="block text-xs font-medium text-gray-600 dark:text-slate-300 mb-1">Nome</label>
+                <input
+                  value={newSubjectName}
+                  onChange={(event) => {
+                    setNewSubjectName(event.target.value);
+                    if (newSubjectError) setNewSubjectError(null);
+                  }}
+                  className="w-full rounded-lg border border-gray-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                  placeholder="Ex: Literatura"
+                  autoFocus
+                />
+              </div>
+
+              <div className="grid grid-cols-[1fr_auto] gap-3 items-end">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 dark:text-slate-300 mb-1">Emoji</label>
+                  <input
+                    value={newSubjectEmoji}
+                    onChange={(event) => setNewSubjectEmoji(event.target.value)}
+                    className="w-full rounded-lg border border-gray-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                    placeholder="\u{1F4DA}"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 dark:text-slate-300 mb-1">Cor</label>
+                  <input
+                    type="color"
+                    value={newSubjectColor}
+                    onChange={(event) => setNewSubjectColor(event.target.value)}
+                    className="h-10 w-14 rounded-lg border border-gray-300 dark:border-slate-700 p-1 bg-white dark:bg-slate-950"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={closeCreateSubjectModal}
+                  className="px-3 py-2 rounded-lg text-sm text-gray-600 dark:text-slate-300 bg-gray-100 dark:bg-slate-800 hover:bg-gray-200 dark:hover:bg-slate-700"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-3 py-2 rounded-lg text-sm text-white bg-blue-600 hover:bg-blue-700 inline-flex items-center gap-1"
+                >
+                  <Plus size={14} /> Criar
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {renameSubjectState && (
+        <div className="fixed inset-0 z-[82] bg-black/40 flex items-center justify-center p-4">
+          <div className="w-full max-w-md rounded-xl bg-white dark:bg-slate-900 shadow-2xl border border-gray-200 dark:border-slate-700">
+            <div className="px-4 py-3 border-b border-gray-100 dark:border-slate-700 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-gray-800 dark:text-slate-100">Renomear disciplina</h3>
+              <button
+                onClick={() => setRenameSubjectState(null)}
+                className="p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-slate-800 text-gray-500 dark:text-slate-400"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="p-4 space-y-3">
+              <input
+                value={renameSubjectState.value}
+                onChange={event => setRenameSubjectState(prev => (prev ? { ...prev, value: event.target.value, error: null } : prev))}
+                className="w-full rounded-lg border border-gray-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-3 py-2 text-sm"
+                autoFocus
+              />
+              {renameSubjectState.error && (
+                <p className="text-xs text-red-600">{renameSubjectState.error}</p>
+              )}
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  onClick={() => setRenameSubjectState(null)}
+                  className="px-3 py-2 rounded-lg text-sm text-gray-600 dark:text-slate-300 bg-gray-100 dark:bg-slate-800 hover:bg-gray-200 dark:hover:bg-slate-700"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={saveRenameSubject}
+                  className="px-3 py-2 rounded-lg text-sm text-white bg-blue-600 hover:bg-blue-700"
+                >
+                  Salvar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmDialog && (
+        <div className="fixed inset-0 z-[83] bg-black/40 flex items-center justify-center p-4">
+          <div className="w-full max-w-md rounded-xl bg-white dark:bg-slate-900 shadow-2xl border border-gray-200 dark:border-slate-700 p-4">
+            <h3 className="text-sm font-semibold text-gray-800 dark:text-slate-100">{confirmDialog.title}</h3>
+            <p className="text-xs text-gray-500 dark:text-slate-400 mt-2">{confirmDialog.message}</p>
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                onClick={() => setConfirmDialog(null)}
+                className="px-3 py-1.5 rounded-lg text-sm bg-gray-100 dark:bg-slate-800 text-gray-700 dark:text-slate-200"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => {
+                  const action = confirmDialog.onConfirm;
+                  setConfirmDialog(null);
+                  action();
+                }}
+                className={`px-3 py-1.5 rounded-lg text-sm text-white ${
+                  confirmDialog.tone === 'danger' ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700'
+                }`}
+              >
+                {confirmDialog.confirmLabel || 'Confirmar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {toasts.length > 0 && (
+        <div className="fixed right-3 bottom-20 lg:bottom-4 z-[110] space-y-2 w-[360px] max-w-[calc(100vw-1.5rem)]">
+          {toasts.map(toast => (
+            <div
+              key={toast.id}
+              className={`rounded-xl border px-3 py-2 text-sm shadow-lg ${
+                toast.tone === 'success'
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-800 dark:bg-emerald-900/30 dark:border-emerald-800 dark:text-emerald-200'
+                  : toast.tone === 'error'
+                    ? 'bg-red-50 border-red-200 text-red-800 dark:bg-red-900/30 dark:border-red-800 dark:text-red-200'
+                    : 'bg-sky-50 border-sky-200 text-sky-800 dark:bg-sky-900/30 dark:border-sky-800 dark:text-sky-200'
+              }`}
+            >
+              {toast.message}
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Mobile Bottom Nav */}
-      <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 lg:hidden z-40 safe-area-pb">
-        <div className="flex">
+      <div className="fixed bottom-0 left-0 right-0 bg-white dark:bg-slate-900 border-t border-gray-200 dark:border-slate-700 lg:hidden z-40 safe-area-pb">
+        <div className="grid grid-cols-4">
           <button
             onClick={navigateToOverview}
             className={`flex-1 py-3 flex flex-col items-center gap-1 text-xs ${
@@ -279,6 +1020,15 @@ export function App() {
                 {reviewsDueCount}
               </span>
             )}
+          </button>
+          <button
+            onClick={navigateToEssays}
+            className={`flex-1 py-3 flex flex-col items-center gap-1 text-xs ${
+              view === 'essays' ? 'text-cyan-700 font-bold' : 'text-gray-400'
+            }`}
+          >
+            <FileText size={20} />
+            Redacoes
           </button>
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}

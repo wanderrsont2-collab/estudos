@@ -1,15 +1,24 @@
-﻿import { useState, type CSSProperties } from 'react';
-import { Subject, Topic, TopicGroup, Priority } from '../types';
+﻿import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { Subject, Topic, TopicGroup, Priority, type ReviewEntry } from '../types';
 import {
   createTopic, createTopicGroup, getSubjectStats, getGroupStats, generateId,
   getDeadlineInfo, parseStructuredImport, PRIORITY_CONFIG, getAllTopics,
 } from '../store';
-import { getReviewStatus, type FSRSConfig } from '../fsrs';
-import { TopicReviewWidget } from './ReviewSystem';
+import {
+  getReviewStatus,
+  fsrsReview,
+  RATING_OPTIONS,
+  suggestRatingFromPerformance,
+  generateReviewId,
+  normalizeFSRSConfig,
+  type FSRSConfig,
+  type FSRSRating,
+  FSRS_VERSION_LABEL,
+} from '../fsrs';
 import {
   ArrowLeft, Plus, Trash2, Check, X, BookOpen, Edit3, Save,
   ChevronDown, ChevronRight, FolderPlus, Calendar, AlertTriangle,
-  Clock, Flag, Brain,
+  Clock, Flag, Brain, Sparkles,
 } from 'lucide-react';
 
 interface SubjectDetailProps {
@@ -21,6 +30,11 @@ interface SubjectDetailProps {
 
 type StatusFilter = 'all' | 'studied' | 'pending';
 const PRIORITY_OPTIONS: Priority[] = ['alta', 'media', 'baixa'];
+
+interface StudyPopupState {
+  groupId: string;
+  topicId: string;
+}
 
 function getStartOfToday(): Date {
   const today = new Date();
@@ -55,6 +69,13 @@ function ProgressBar({ value, color }: { value: number; color: string }) {
 
 function formatPercent(v: number) {
   return `${Math.round(v * 100)}%`;
+}
+
+function toDateOnlyString(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 function PriorityBadge({ priority, onClick, size = 'sm' }: { priority: Priority | null; onClick?: () => void; size?: 'sm' | 'xs' }) {
@@ -99,8 +120,14 @@ function DeadlineBadge({ deadline, size = 'sm' }: { deadline: string | null; siz
 export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: SubjectDetailProps) {
   const [newGroupName, setNewGroupName] = useState('');
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
-  const [priorityFilter, setPriorityFilter] = useState<Priority | 'all'>('all');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>(() => {
+    const stored = window.localStorage.getItem(`subject_status_filter_${subject.id}`);
+    return stored === 'studied' || stored === 'pending' ? stored : 'all';
+  });
+  const [priorityFilter, setPriorityFilter] = useState<Priority | 'all'>(() => {
+    const stored = window.localStorage.getItem(`subject_priority_filter_${subject.id}`);
+    return stored === 'alta' || stored === 'media' || stored === 'baixa' ? stored : 'all';
+  });
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [editGroupName, setEditGroupName] = useState('');
   const [editingTopicId, setEditingTopicId] = useState<string | null>(null);
@@ -112,6 +139,8 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
   const [showBulkAdd, setShowBulkAdd] = useState<string | null>(null);
   const [bulkInputs, setBulkInputs] = useState<Record<string, string>>({});
   const [priorityMenuTopic, setPriorityMenuTopic] = useState<string | null>(null);
+  const [expandedTopics, setExpandedTopics] = useState<Set<string>>(new Set());
+  const [studyPopup, setStudyPopup] = useState<StudyPopupState | null>(null);
 
   const stats = getSubjectStats(subject);
   const allTopics = getAllTopics(subject);
@@ -194,18 +223,87 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
     );
   }
 
-  // Generic update handler for FSRS widget (takes subjectId too)
-  function handleFsrsUpdate(_subjectId: string, groupId: string, topicId: string, changes: Partial<Topic>) {
-    updateTopicInGroup(groupId, topicId, changes);
-  }
-
-  function toggleStudied(groupId: string, topicId: string) {
+  function findTopic(groupId: string, topicId: string): Topic | null {
     const group = subject.topicGroups.find(g => g.id === groupId);
     const topic = group?.topics.find(t => t.id === topicId);
+    return topic ?? null;
+  }
+
+  function setTopicStudied(groupId: string, topicId: string, studied: boolean) {
+    const topic = findTopic(groupId, topicId);
     if (!topic) return;
     updateTopicInGroup(groupId, topicId, {
-      studied: !topic.studied,
-      dateStudied: !topic.studied ? new Date().toISOString() : null,
+      studied,
+      dateStudied: studied ? topic.dateStudied ?? new Date().toISOString() : null,
+    });
+  }
+
+  function openStudyPopup(groupId: string, topicId: string) {
+    setStudyPopup({ groupId, topicId });
+  }
+
+  function toggleTopicExpanded(topicId: string) {
+    setExpandedTopics(prev => {
+      const next = new Set(prev);
+      if (next.has(topicId)) {
+        next.delete(topicId);
+      } else {
+        next.add(topicId);
+      }
+      return next;
+    });
+  }
+
+  function runTopicReview(groupId: string, topicId: string, rating: FSRSRating) {
+    const topic = findTopic(groupId, topicId);
+    if (!topic) return;
+
+    const normalizedFsrsConfig = normalizeFSRSConfig(fsrsConfig);
+    const currentState = {
+      difficulty: topic.fsrsDifficulty,
+      stability: topic.fsrsStability,
+      lastReview: topic.fsrsLastReview,
+      nextReview: topic.fsrsNextReview,
+    };
+
+    const { newState, intervalDays, retrievability } = fsrsReview(currentState, rating, normalizedFsrsConfig);
+    const ratingOption = RATING_OPTIONS.find(option => option.value === rating);
+
+    if (!ratingOption) return;
+
+    const performanceScore = topic.questionsTotal > 0
+      ? topic.questionsCorrect / topic.questionsTotal
+      : null;
+
+    const reviewEntry: ReviewEntry = {
+      id: generateReviewId(),
+      reviewNumber: topic.reviewHistory.length + 1,
+      date: toDateOnlyString(new Date()),
+      rating,
+      ratingLabel: ratingOption.label,
+      difficultyBefore: currentState.difficulty,
+      difficultyAfter: newState.difficulty,
+      stabilityBefore: currentState.stability,
+      stabilityAfter: newState.stability,
+      intervalDays,
+      retrievability,
+      performanceScore,
+      questionsTotal: topic.questionsTotal,
+      questionsCorrect: topic.questionsCorrect,
+      algorithmVersion: normalizedFsrsConfig.version,
+      requestedRetention: normalizedFsrsConfig.requestedRetention,
+      usedCustomWeights: normalizedFsrsConfig.customWeights !== null,
+    };
+
+    updateTopicInGroup(groupId, topicId, {
+      studied: true,
+      dateStudied: topic.dateStudied ?? new Date().toISOString(),
+      fsrsDifficulty: newState.difficulty,
+      fsrsStability: newState.stability,
+      fsrsLastReview: newState.lastReview,
+      fsrsNextReview: newState.nextReview,
+      deadline: newState.nextReview ?? topic.deadline,
+      reviewHistory: [...topic.reviewHistory, reviewEntry],
     });
   }
 
@@ -263,6 +361,14 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
   }).length;
   const reviewsDueCount = allTopics.filter(t => isReviewDue(t.fsrsNextReview)).length;
   const pendingTopicsCount = allTopics.filter(t => !t.studied).length;
+
+  useEffect(() => {
+    window.localStorage.setItem(`subject_status_filter_${subject.id}`, statusFilter);
+  }, [statusFilter, subject.id]);
+
+  useEffect(() => {
+    window.localStorage.setItem(`subject_priority_filter_${subject.id}`, priorityFilter);
+  }, [priorityFilter, subject.id]);
 
   return (
     <div className="space-y-6 pb-20 lg:pb-6">
@@ -471,7 +577,7 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
             if (!hasFilteredContent && group.topics.length > 0) return null;
 
             return (
-              <div key={group.id} className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+              <div key={group.id} className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-visible">
                 {/* Group Header */}
                 <div
                   className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50 transition-colors"
@@ -562,7 +668,7 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
                 {!isCollapsed && (
                   <div className="border-t border-gray-100">
                     {/* Add topic to group */}
-                    <div className="px-4 py-3 bg-gray-50/50 space-y-2">
+                    <div className="px-4 py-3 bg-gray-50/50 dark:bg-slate-900/60 space-y-2">
                       <div className="flex gap-2">
                         <input
                           type="text"
@@ -570,7 +676,7 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
                           onChange={e => setNewTopicInputs(prev => ({ ...prev, [group.id]: e.target.value }))}
                           onKeyDown={e => e.key === 'Enter' && addTopicToGroup(group.id)}
                           placeholder="Adicionar assunto..."
-                          className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:border-transparent bg-white"
+                          className="flex-1 border border-gray-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:border-transparent bg-white dark:bg-slate-950 dark:text-slate-100"
                           style={getRingColorStyle(subject.color)}
                         />
                         <button
@@ -594,7 +700,7 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
                             value={bulkInputs[group.id] || ''}
                             onChange={e => setBulkInputs(prev => ({ ...prev, [group.id]: e.target.value }))}
                             placeholder={"Um assunto por linha:\nQuatro operacoes\nFracoes\nPotenciacao"}
-                            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:border-transparent h-28 resize-y bg-white"
+                            className="w-full border border-gray-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:border-transparent h-28 resize-y bg-white dark:bg-slate-950 dark:text-slate-100"
                             style={getRingColorStyle(subject.color)}
                           />
                           <button
@@ -620,22 +726,20 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
                       </div>
                     ) : (
                       <div className="divide-y divide-gray-50">
-                        {filtered.map((topic, index) => (
+                        {filtered.map((topic) => (
                           <TopicRow
                             key={topic.id}
                             topic={topic}
-                            index={index}
                             groupId={group.id}
-                            subjectId={subject.id}
                             subjectColor={subject.color}
-                            fsrsConfig={fsrsConfig}
                             editingTopicId={editingTopicId}
                             editTopicName={editTopicName}
                             deleteConfirm={deleteConfirm}
                             priorityMenuTopic={priorityMenuTopic}
-                            onToggleStudied={toggleStudied}
+                            isExpanded={expandedTopics.has(topic.id)}
+                            onToggleExpanded={toggleTopicExpanded}
+                            onOpenStudyPopup={openStudyPopup}
                             onUpdateTopic={updateTopicInGroup}
-                            onFsrsUpdate={handleFsrsUpdate}
                             onRemoveTopic={removeTopic}
                             onStartEdit={startTopicEdit}
                             onSaveEdit={saveTopicEdit}
@@ -656,6 +760,21 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
         </div>
       )}
 
+      {studyPopup && (
+        <TopicStudyModal
+          key={`${studyPopup.groupId}-${studyPopup.topicId}`}
+          topic={findTopic(studyPopup.groupId, studyPopup.topicId)}
+          groupId={studyPopup.groupId}
+          subjectColor={subject.color}
+          fsrsConfig={fsrsConfig}
+          onClose={() => setStudyPopup(null)}
+          onUpdateTopic={updateTopicInGroup}
+          onSetStudied={setTopicStudied}
+          onRunReview={runTopicReview}
+          onSetPriority={setPriority}
+        />
+      )}
+
       {/* Summary */}
       {allTopics.length > 0 && (
         <div
@@ -673,18 +792,16 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
 // ---- TopicRow sub-component ----
 interface TopicRowProps {
   topic: Topic;
-  index: number;
   groupId: string;
-  subjectId: string;
   subjectColor: string;
-  fsrsConfig: FSRSConfig;
   editingTopicId: string | null;
   editTopicName: string;
   deleteConfirm: string | null;
   priorityMenuTopic: string | null;
-  onToggleStudied: (groupId: string, topicId: string) => void;
+  isExpanded: boolean;
+  onToggleExpanded: (topicId: string) => void;
+  onOpenStudyPopup: (groupId: string, topicId: string) => void;
   onUpdateTopic: (groupId: string, topicId: string, changes: Partial<Topic>) => void;
-  onFsrsUpdate: (subjectId: string, groupId: string, topicId: string, changes: Partial<Topic>) => void;
   onRemoveTopic: (groupId: string, topicId: string) => void;
   onStartEdit: (topic: Topic) => void;
   onSaveEdit: (groupId: string, topicId: string) => void;
@@ -696,36 +813,64 @@ interface TopicRowProps {
 }
 
 function TopicRow({
-  topic, index, groupId, subjectId, subjectColor, fsrsConfig,
+  topic, groupId, subjectColor,
   editingTopicId, editTopicName, deleteConfirm, priorityMenuTopic,
-  onToggleStudied, onUpdateTopic, onFsrsUpdate, onRemoveTopic,
+  isExpanded, onToggleExpanded, onOpenStudyPopup, onUpdateTopic, onRemoveTopic,
   onStartEdit, onSaveEdit, onCancelEdit, onSetEditName,
   onSetDeleteConfirm, onSetPriority, onTogglePriorityMenu,
 }: TopicRowProps) {
   const isEditing = editingTopicId === topic.id;
+  const detailsVisible = isExpanded || isEditing;
   const showPriorityMenu = priorityMenuTopic === topic.id;
+  const priorityAnchorRef = useRef<HTMLDivElement | null>(null);
+  const [priorityMenuPosition, setPriorityMenuPosition] = useState<'up' | 'down'>('down');
   const reviewStatus = getReviewStatus(topic.fsrsNextReview);
   const isDue = isReviewDue(topic.fsrsNextReview);
   const accuracy = topic.questionsTotal > 0 ? topic.questionsCorrect / topic.questionsTotal : 0;
+  const nextReviewDate = topic.fsrsNextReview
+    ? new Date(topic.fsrsNextReview + 'T00:00:00').toLocaleDateString('pt-BR')
+    : null;
+
+  useEffect(() => {
+    if (!showPriorityMenu) return;
+
+    const updatePriorityMenuPosition = () => {
+      const anchorRect = priorityAnchorRef.current?.getBoundingClientRect();
+      if (!anchorRect) return;
+
+      const estimatedMenuHeight = 170;
+      const spaceBelow = window.innerHeight - anchorRect.bottom;
+      const spaceAbove = anchorRect.top;
+      const openUpward = spaceBelow < estimatedMenuHeight && spaceAbove > spaceBelow;
+      setPriorityMenuPosition(openUpward ? 'up' : 'down');
+    };
+
+    updatePriorityMenuPosition();
+    window.addEventListener('resize', updatePriorityMenuPosition);
+    window.addEventListener('scroll', updatePriorityMenuPosition, true);
+
+    return () => {
+      window.removeEventListener('resize', updatePriorityMenuPosition);
+      window.removeEventListener('scroll', updatePriorityMenuPosition, true);
+    };
+  }, [showPriorityMenu]);
 
   return (
-    <div className={`px-4 py-3 transition-all ${topic.studied ? 'bg-green-50/30' : 'hover:bg-gray-50/50'} ${isDue ? 'border-l-2 border-l-purple-400' : ''}`}>
+    <div className={`px-4 py-3 transition-all ${topic.studied ? 'bg-green-50/30 dark:bg-transparent dark:hover:bg-slate-800/40' : 'hover:bg-gray-50/50 dark:hover:bg-slate-800/40'} ${isDue ? 'border-l-2 border-l-purple-400' : ''}`}>
       <div className="flex items-start gap-3">
-        {/* Checkbox */}
         <button
-          onClick={() => onToggleStudied(groupId, topic.id)}
-          className={`mt-0.5 w-6 h-6 rounded-md border-2 flex items-center justify-center shrink-0 transition-all ${
+          onClick={() => onOpenStudyPopup(groupId, topic.id)}
+                className={`mt-0.5 w-6 h-6 rounded-md border-2 flex items-center justify-center shrink-0 transition-all ${
             topic.studied
               ? 'bg-green-500 border-green-500 text-white'
-              : 'border-gray-300 hover:border-gray-400'
+              : 'border-gray-300 dark:border-slate-600 hover:border-gray-400 dark:hover:border-slate-400'
           }`}
+          title="Abrir painel rapido do assunto"
         >
           {topic.studied && <Check size={14} />}
         </button>
 
-        {/* Main content */}
         <div className="flex-1 min-w-0">
-          {/* Row 1: Name + badges */}
           {isEditing ? (
             <div className="flex gap-2 items-center mb-2">
               <input
@@ -741,19 +886,19 @@ function TopicRow({
               <button onClick={onCancelEdit} className="text-gray-400 hover:text-gray-600"><X size={16} /></button>
             </div>
           ) : (
-            <div className="flex items-center gap-2 flex-wrap mb-1">
-              <span className="text-xs font-mono text-gray-400 w-5">{index + 1}.</span>
-              <span className={`font-medium text-sm ${topic.studied ? 'line-through text-gray-400' : 'text-gray-800'}`}>
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                onClick={() => onToggleExpanded(topic.id)}
+                className="p-1 rounded-md text-gray-400 dark:text-slate-400 hover:text-gray-700 dark:hover:text-slate-100 hover:bg-gray-100 dark:hover:bg-slate-800 transition-colors"
+                title={detailsVisible ? 'Ocultar detalhes' : 'Mostrar detalhes'}
+              >
+                {detailsVisible ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+              </button>
+              <span className={`font-medium text-sm ${topic.studied ? 'line-through text-gray-400 dark:text-slate-500' : 'text-gray-800 dark:text-slate-100'}`}>
                 {topic.name}
               </span>
-              {topic.studied && (
-                <span className="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-medium">
-                  {"\u2713"} Estudado
-                </span>
-              )}
 
-              {/* Priority badge */}
-              <div className="relative">
+              <div className="relative" ref={priorityAnchorRef}>
                 <PriorityBadge
                   priority={topic.priority}
                   onClick={() => onTogglePriorityMenu(showPriorityMenu ? null : topic.id)}
@@ -761,8 +906,12 @@ function TopicRow({
                 />
                 {showPriorityMenu && (
                   <>
-                    <div className="fixed inset-0 z-10" onClick={() => onTogglePriorityMenu(null)} />
-                    <div className="absolute top-full left-0 mt-1 z-20 bg-white rounded-lg shadow-lg border border-gray-200 py-1 min-w-[120px]">
+                    <div className="fixed inset-0 z-20" onClick={() => onTogglePriorityMenu(null)} />
+                    <div
+                      className={`absolute left-0 z-30 bg-white rounded-lg shadow-lg border border-gray-200 py-1 min-w-[130px] ${
+                        priorityMenuPosition === 'up' ? 'bottom-full mb-1' : 'top-full mt-1'
+                      }`}
+                    >
                       {PRIORITY_OPTIONS.map(p => {
                         const config = PRIORITY_CONFIG[p];
                         return (
@@ -792,142 +941,382 @@ function TopicRow({
                 )}
               </div>
 
-              {/* Deadline badge */}
-              <DeadlineBadge deadline={topic.deadline} size="xs" />
-
-              {/* FSRS Review badge */}
-              {topic.reviewHistory.length > 0 && (
+              {nextReviewDate && (
                 <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium flex items-center gap-1 ${reviewStatus.className}`}>
-                  <Brain size={10} />
-                  {reviewStatus.text}
+                  <Calendar size={10} />
+                  Prox. revisao: {nextReviewDate}
                 </span>
               )}
             </div>
           )}
 
-          {/* Row 2: Questions + Deadline + Date studied */}
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mt-1">
-            <div className="flex items-center gap-1.5">
-              <label className="text-xs text-gray-500">Questoes:</label>
-              <input
-                type="number"
-                min="0"
-                value={topic.questionsTotal || ''}
-                onChange={e => {
-                  const nextTotal = parseNonNegativeInt(e.target.value);
-                  onUpdateTopic(groupId, topic.id, {
-                    questionsTotal: nextTotal,
-                    questionsCorrect: Math.min(topic.questionsCorrect, nextTotal),
-                  });
-                }}
-                className="w-14 border border-gray-200 rounded-md px-2 py-1 text-xs text-center focus:outline-none focus:ring-1 bg-white"
-                style={getRingColorStyle(subjectColor)}
-                placeholder="0"
-              />
-            </div>
-            <div className="flex items-center gap-1.5">
-              <label className="text-xs text-gray-500">Acertos:</label>
-              <input
-                type="number"
-                min="0"
-                max={topic.questionsTotal}
-                value={topic.questionsCorrect || ''}
-                onChange={e => onUpdateTopic(groupId, topic.id, {
-                  questionsCorrect: Math.min(parseNonNegativeInt(e.target.value), topic.questionsTotal),
-                })}
-                className="w-14 border border-gray-200 rounded-md px-2 py-1 text-xs text-center focus:outline-none focus:ring-1 bg-white"
-                style={getRingColorStyle(subjectColor)}
-                placeholder="0"
-              />
-            </div>
-            {topic.questionsTotal > 0 && (
-              <span
-                className={`text-xs font-bold px-2 py-0.5 rounded-full ${
-                  accuracy >= 0.7
-                    ? 'bg-green-100 text-green-700'
-                    : accuracy >= 0.5
-                    ? 'bg-yellow-100 text-yellow-700'
-                    : 'bg-red-100 text-red-700'
-                }`}
-              >
-                {formatPercent(accuracy)}
-              </span>
-            )}
+          {detailsVisible && (
+            <>
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mt-2">
+                <div className="flex items-center gap-1.5">
+                  <label className="text-xs text-gray-500">Questoes:</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={topic.questionsTotal || ''}
+                    onChange={e => {
+                      const nextTotal = parseNonNegativeInt(e.target.value);
+                      onUpdateTopic(groupId, topic.id, {
+                        questionsTotal: nextTotal,
+                        questionsCorrect: Math.min(topic.questionsCorrect, nextTotal),
+                      });
+                    }}
+                    className="w-14 border border-gray-200 rounded-md px-2 py-1 text-xs text-center focus:outline-none focus:ring-1 bg-white"
+                    style={getRingColorStyle(subjectColor)}
+                    placeholder="0"
+                  />
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <label className="text-xs text-gray-500">Acertos:</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max={topic.questionsTotal}
+                    value={topic.questionsCorrect || ''}
+                    onChange={e => onUpdateTopic(groupId, topic.id, {
+                      questionsCorrect: Math.min(parseNonNegativeInt(e.target.value), topic.questionsTotal),
+                    })}
+                    className="w-14 border border-gray-200 rounded-md px-2 py-1 text-xs text-center focus:outline-none focus:ring-1 bg-white"
+                    style={getRingColorStyle(subjectColor)}
+                    placeholder="0"
+                  />
+                </div>
+                {topic.questionsTotal > 0 && (
+                  <span
+                    className={`text-xs font-bold px-2 py-0.5 rounded-full ${
+                      accuracy >= 0.7
+                        ? 'bg-green-100 text-green-700'
+                        : accuracy >= 0.5
+                        ? 'bg-yellow-100 text-yellow-700'
+                        : 'bg-red-100 text-red-700'
+                    }`}
+                  >
+                    {formatPercent(accuracy)}
+                  </span>
+                )}
 
-            <span className="text-gray-200">|</span>
-
-            {/* Deadline input */}
-            <div className="flex items-center gap-1.5">
-              <Calendar size={12} className="text-gray-400" />
-              <label className="text-xs text-gray-500">Prazo:</label>
-              <input
-                type="date"
-                value={topic.deadline || ''}
-                onChange={e => onUpdateTopic(groupId, topic.id, { deadline: e.target.value || null })}
-                className="border border-gray-200 rounded-md px-2 py-1 text-xs focus:outline-none focus:ring-1 bg-white"
-                style={getRingColorStyle(subjectColor)}
-              />
-            </div>
-
-            {topic.dateStudied && (
-              <>
                 <span className="text-gray-200">|</span>
-                <span className="text-xs text-gray-400">
-                  {"\u{1F4C5}"} Estudado: {new Date(topic.dateStudied).toLocaleDateString('pt-BR')}
-                </span>
-              </>
-            )}
-          </div>
 
-          {/* Row 3: Notes */}
-          <div className="mt-2">
-            <input
-              type="text"
-              value={topic.notes}
-              onChange={e => onUpdateTopic(groupId, topic.id, { notes: e.target.value })}
-              placeholder="\u{1F4DD} Anotacoes..."
-              className="w-full border-0 border-b border-gray-200 text-xs text-gray-500 py-1 focus:outline-none focus:border-gray-400 bg-transparent placeholder-gray-300"
-            />
-          </div>
+                <div className="flex items-center gap-1.5">
+                  <Calendar size={12} className="text-gray-400" />
+                  <label className="text-xs text-gray-500">Prazo:</label>
+                  <input
+                    type="date"
+                    value={topic.deadline || ''}
+                    onChange={e => onUpdateTopic(groupId, topic.id, { deadline: e.target.value || null })}
+                    className="border border-gray-200 rounded-md px-2 py-1 text-xs focus:outline-none focus:ring-1 bg-white"
+                    style={getRingColorStyle(subjectColor)}
+                  />
+                </div>
 
-          {/* Row 4: FSRS Review Widget */}
-          {topic.studied && (
-            <TopicReviewWidget
-              topic={topic}
-              groupId={groupId}
-              subjectId={subjectId}
-              subjectColor={subjectColor}
-              fsrsConfig={fsrsConfig}
-              onUpdate={onFsrsUpdate}
-            />
-          )}
-        </div>
+                <DeadlineBadge deadline={topic.deadline} size="xs" />
+              </div>
 
-        {/* Actions */}
-        <div className="flex items-center gap-1 shrink-0">
-          <button
-            onClick={() => onStartEdit(topic)}
-            className="p-1.5 text-gray-400 hover:text-blue-600 transition-colors rounded-lg hover:bg-blue-50"
-            title="Editar nome"
-          >
-            <Edit3 size={14} />
-          </button>
-          {deleteConfirm === `topic-${topic.id}` ? (
-            <div className="flex items-center gap-1">
-              <button onClick={() => onRemoveTopic(groupId, topic.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg"><Check size={14} /></button>
-              <button onClick={() => onSetDeleteConfirm(null)} className="p-1.5 text-gray-400 hover:bg-gray-50 rounded-lg"><X size={14} /></button>
-            </div>
-          ) : (
-            <button
-              onClick={() => onSetDeleteConfirm(`topic-${topic.id}`)}
-              className="p-1.5 text-gray-400 hover:text-red-600 transition-colors rounded-lg hover:bg-red-50"
-              title="Excluir assunto"
-            >
-              <Trash2 size={14} />
-            </button>
+              <div className="mt-2">
+                <input
+                  type="text"
+                  value={topic.notes}
+                  onChange={e => onUpdateTopic(groupId, topic.id, { notes: e.target.value })}
+                  placeholder="\u{1F4DD} Anotacoes..."
+                  className="w-full border-0 border-b border-gray-200 text-xs text-gray-500 py-1 focus:outline-none focus:border-gray-400 bg-transparent placeholder-gray-300"
+                />
+              </div>
+
+              <div className="mt-2 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-[11px] text-gray-500">
+                  <Brain size={12} className="text-purple-500" />
+                  <span>{topic.reviewHistory.length > 0 ? `Rev. ${topic.reviewHistory.length} - ${reviewStatus.text}` : 'Sem revisoes FSRS ainda'}</span>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    onClick={() => onStartEdit(topic)}
+                    className="p-1.5 text-gray-400 hover:text-blue-600 transition-colors rounded-lg hover:bg-blue-50"
+                    title="Editar nome"
+                  >
+                    <Edit3 size={14} />
+                  </button>
+                  {deleteConfirm === `topic-${topic.id}` ? (
+                    <div className="flex items-center gap-1">
+                      <button onClick={() => onRemoveTopic(groupId, topic.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg"><Check size={14} /></button>
+                      <button onClick={() => onSetDeleteConfirm(null)} className="p-1.5 text-gray-400 hover:bg-gray-50 rounded-lg"><X size={14} /></button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => onSetDeleteConfirm(`topic-${topic.id}`)}
+                      className="p-1.5 text-gray-400 hover:text-red-600 transition-colors rounded-lg hover:bg-red-50"
+                      title="Excluir assunto"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  )}
+                </div>
+              </div>
+            </>
           )}
         </div>
       </div>
     </div>
   );
 }
+
+interface TopicStudyModalProps {
+  topic: Topic | null;
+  groupId: string;
+  subjectColor: string;
+  fsrsConfig: FSRSConfig;
+  onClose: () => void;
+  onUpdateTopic: (groupId: string, topicId: string, changes: Partial<Topic>) => void;
+  onSetStudied: (groupId: string, topicId: string, studied: boolean) => void;
+  onRunReview: (groupId: string, topicId: string, rating: FSRSRating) => void;
+  onSetPriority: (groupId: string, topicId: string, priority: Priority | null) => void;
+}
+
+function TopicStudyModal({
+  topic,
+  groupId,
+  subjectColor,
+  fsrsConfig,
+  onClose,
+  onUpdateTopic,
+  onSetStudied,
+  onRunReview,
+  onSetPriority,
+}: TopicStudyModalProps) {
+  const [autoMode, setAutoMode] = useState(true);
+  if (!topic) return null;
+
+  const normalizedConfig = normalizeFSRSConfig(fsrsConfig);
+  const suggestedRating = suggestRatingFromPerformance(topic.questionsTotal, topic.questionsCorrect);
+  const suggestedOption = suggestedRating
+    ? RATING_OPTIONS.find(option => option.value === suggestedRating) ?? null
+    : null;
+  const currentState = {
+    difficulty: topic.fsrsDifficulty,
+    stability: topic.fsrsStability,
+    lastReview: topic.fsrsLastReview,
+    nextReview: topic.fsrsNextReview,
+  };
+  const previewNextReviewDate = (rating: FSRSRating): string | null =>
+    fsrsReview(currentState, rating, normalizedConfig).newState.nextReview;
+  const suggestedDeadline = suggestedOption ? previewNextReviewDate(suggestedOption.value) : null;
+  const reviewStatus = getReviewStatus(topic.fsrsNextReview);
+  const accuracy = topic.questionsTotal > 0 ? topic.questionsCorrect / topic.questionsTotal : null;
+
+  return (
+    <div className="fixed inset-0 z-40 bg-black/40 p-4 flex items-center justify-center" onClick={onClose}>
+      <div
+        className="w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white shadow-2xl border border-gray-200"
+        onClick={event => event.stopPropagation()}
+      >
+        <div className="px-5 py-4 border-b border-gray-100 flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-lg font-bold text-gray-800">{topic.name}</h3>
+            <p className="text-xs text-gray-500 mt-0.5">Painel rapido para estudo, desempenho e revisao FSRS.</p>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors"
+            title="Fechar"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="p-5 space-y-5">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <label className="flex items-center gap-2 text-sm text-gray-700">
+              <input
+                type="checkbox"
+                checked={topic.studied}
+                onChange={event => onSetStudied(groupId, topic.id, event.target.checked)}
+                className="rounded border-gray-300 text-green-600 focus:ring-green-400"
+              />
+              Marcar como estudado
+            </label>
+
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-gray-600">Prioridade:</span>
+              {PRIORITY_OPTIONS.map(priority => {
+                const config = PRIORITY_CONFIG[priority];
+                const selected = topic.priority === priority;
+                return (
+                  <button
+                    key={priority}
+                    onClick={() => onSetPriority(groupId, topic.id, selected ? null : priority)}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
+                      selected ? `${config.bg} ${config.color}` : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    }`}
+                  >
+                    {config.emoji} {config.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+            <div>
+              <label className="text-xs uppercase tracking-wide text-gray-400">Questoes</label>
+              <input
+                type="number"
+                min="0"
+                value={topic.questionsTotal || ''}
+                onChange={event => {
+                  const nextTotal = parseNonNegativeInt(event.target.value);
+                  onUpdateTopic(groupId, topic.id, {
+                    questionsTotal: nextTotal,
+                    questionsCorrect: Math.min(topic.questionsCorrect, nextTotal),
+                  });
+                }}
+                className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2"
+                style={getRingColorStyle(subjectColor)}
+              />
+            </div>
+            <div>
+              <label className="text-xs uppercase tracking-wide text-gray-400">Acertos</label>
+              <input
+                type="number"
+                min="0"
+                max={topic.questionsTotal}
+                value={topic.questionsCorrect || ''}
+                onChange={event => onUpdateTopic(groupId, topic.id, {
+                  questionsCorrect: Math.min(parseNonNegativeInt(event.target.value), topic.questionsTotal),
+                })}
+                className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2"
+                style={getRingColorStyle(subjectColor)}
+              />
+            </div>
+            <div>
+              <label className="text-xs uppercase tracking-wide text-gray-400">Data de estudo</label>
+              <input
+                type="date"
+                value={topic.dateStudied ? topic.dateStudied.slice(0, 10) : ''}
+                onChange={event => onUpdateTopic(groupId, topic.id, {
+                  dateStudied: event.target.value ? new Date(`${event.target.value}T12:00:00`).toISOString() : null,
+                  studied: event.target.value ? true : topic.studied,
+                })}
+                className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2"
+                style={getRingColorStyle(subjectColor)}
+              />
+            </div>
+            <div>
+              <label className="text-xs uppercase tracking-wide text-gray-400">Prazo</label>
+              <input
+                type="date"
+                value={topic.deadline || ''}
+                onChange={event => onUpdateTopic(groupId, topic.id, { deadline: event.target.value || null })}
+                className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2"
+                style={getRingColorStyle(subjectColor)}
+              />
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            {accuracy !== null && (
+              <span className={`px-2 py-0.5 rounded-full font-medium ${
+                accuracy >= 0.7
+                  ? 'bg-green-100 text-green-700'
+                  : accuracy >= 0.5
+                  ? 'bg-yellow-100 text-yellow-700'
+                  : 'bg-red-100 text-red-700'
+              }`}>
+                Rendimento: {formatPercent(accuracy)}
+              </span>
+            )}
+            <span className={`px-2 py-0.5 rounded-full font-medium ${reviewStatus.className}`}>
+              {topic.fsrsNextReview ? `Prox. revisao: ${new Date(topic.fsrsNextReview + 'T00:00:00').toLocaleDateString('pt-BR')}` : 'Sem revisao agendada'}
+            </span>
+            <span className="px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 font-medium">
+              {FSRS_VERSION_LABEL[normalizedConfig.version]}
+            </span>
+          </div>
+
+          <div className="rounded-xl border border-purple-200 bg-purple-50 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h4 className="text-sm font-bold text-purple-800">Sistema de revisao FSRS</h4>
+                <p className="text-xs text-purple-600">Use Auto para sugerir dificuldade com base no seu desempenho.</p>
+              </div>
+              <button
+                onClick={() => setAutoMode(prev => !prev)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors inline-flex items-center gap-1 ${
+                  autoMode ? 'bg-purple-700 text-white hover:bg-purple-800' : 'bg-white text-purple-700 hover:bg-purple-100'
+                }`}
+              >
+                <Sparkles size={12} />
+                Auto {autoMode ? 'ON' : 'OFF'}
+              </button>
+            </div>
+
+            {autoMode ? (
+              <div className="mt-3 space-y-2">
+                {suggestedOption ? (
+                  <>
+                    <p className="text-xs text-purple-700 bg-purple-100 rounded-lg px-3 py-2">
+                      Sugestao automatica: {suggestedOption.emoji} {suggestedOption.label}
+                      {accuracy !== null && ` (${formatPercent(accuracy)} de acerto)`}
+                      {suggestedDeadline && ` | Prazo sugerido: ${new Date(suggestedDeadline + 'T00:00:00').toLocaleDateString('pt-BR')}`}
+                    </p>
+                    <button
+                      onClick={() => onRunReview(groupId, topic.id, suggestedOption.value)}
+                      className="px-3 py-2 rounded-lg text-sm font-medium text-white hover:opacity-90 transition-opacity"
+                      style={{ backgroundColor: subjectColor }}
+                    >
+                      Aplicar Auto
+                    </button>
+                  </>
+                ) : (
+                  <p className="text-xs text-purple-700 bg-purple-100 rounded-lg px-3 py-2">
+                    Para usar Auto, informe quantidade de questoes e acertos.
+                  </p>
+                )}
+              </div>
+            ) : (
+              <div className="mt-3">
+                <p className="text-xs text-purple-700 mb-2">Modo manual: escolha a avaliacao da revisao.</p>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                  {RATING_OPTIONS.map(option => {
+                    const nextDate = previewNextReviewDate(option.value);
+                    return (
+                      <button
+                        key={option.value}
+                        onClick={() => onRunReview(groupId, topic.id, option.value)}
+                        className={`py-2 px-2 rounded-lg text-white font-medium text-xs transition-all hover:scale-105 ${option.color} ${option.hoverColor}`}
+                      >
+                        <span className="text-base block">{option.emoji}</span>
+                        <span className="block mt-0.5">{option.label}</span>
+                        {nextDate && (
+                          <span className="block mt-1 text-[10px] opacity-90">
+                            {new Date(nextDate + 'T00:00:00').toLocaleDateString('pt-BR')}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div>
+            <label className="text-xs uppercase tracking-wide text-gray-400">Anotacoes</label>
+            <textarea
+              value={topic.notes}
+              onChange={event => onUpdateTopic(groupId, topic.id, { notes: event.target.value })}
+              rows={3}
+              className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2"
+              style={getRingColorStyle(subjectColor)}
+              placeholder="Observacoes deste assunto..."
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+

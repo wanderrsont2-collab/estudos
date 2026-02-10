@@ -55,10 +55,43 @@ export interface Subject {
   topicGroups: TopicGroup[];
 }
 
+export interface ScheduleRow {
+  id: string;
+  timeLabel: string;
+  cells: string[];
+}
+
+export interface WeeklySchedule {
+  columns: string[];
+  rows: ScheduleRow[];
+}
+
+export interface EssayEntry {
+  id: string;
+  theme: string;
+  date: string; // YYYY-MM-DD
+  c1: number; // 0-200
+  c2: number; // 0-200
+  c3: number; // 0-200
+  c4: number; // 0-200
+  c5: number; // 0-200
+  totalScore: number; // 0-1000
+  content: string;
+  createdAt: string; // ISO
+  updatedAt: string; // ISO
+}
+
+export interface EssayMonitorSettings {
+  essays: EssayEntry[];
+  timerDurationMinutes: 60 | 90;
+}
+
 export interface StudyData {
   subjects: Subject[];
   settings: {
     fsrs: FSRSConfig;
+    schedule: WeeklySchedule;
+    essayMonitor: EssayMonitorSettings;
   };
   lastUpdated: string;
 }

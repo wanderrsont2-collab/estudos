@@ -1,4 +1,14 @@
-﻿import { StudyData, Subject, Topic, TopicGroup, Priority, ReviewEntry } from './types';
+import {
+  StudyData,
+  Subject,
+  Topic,
+  TopicGroup,
+  Priority,
+  ReviewEntry,
+  WeeklySchedule,
+  EssayEntry,
+  EssayMonitorSettings,
+} from './types';
 import { DEFAULT_FSRS_CONFIG, normalizeFSRSConfig } from './fsrs';
 
 const STORAGE_KEY = 'enem2025_study_data';
@@ -32,9 +42,139 @@ const defaultSubjects: Omit<Subject, 'topicGroups'>[] = [
   { id: 'filosofia_sociologia', name: 'Filosofia/Sociologia', emoji: '\u{1F9E0}', color: '#6a1b9a', colorLight: '#f3e5f5' },
 ];
 
+const DEFAULT_SCHEDULE_COLUMNS = [
+  'Segunda',
+  'Terca',
+  'Quarta',
+  'Quinta',
+  'Sexta',
+  'Sabado',
+  'Domingo',
+];
+const DEFAULT_ESSAY_TIMER_DURATION: 60 | 90 = 90;
+
+function createEmptyScheduleRow(columnsCount: number, timeLabel = '') {
+  return {
+    id: 'sched_' + generateId(),
+    timeLabel,
+    cells: Array.from({ length: columnsCount }, () => ''),
+  };
+}
+
+export function getDefaultWeeklySchedule(): WeeklySchedule {
+  return {
+    columns: [...DEFAULT_SCHEDULE_COLUMNS],
+    rows: [
+      createEmptyScheduleRow(DEFAULT_SCHEDULE_COLUMNS.length, '08:00 - 09:00'),
+      createEmptyScheduleRow(DEFAULT_SCHEDULE_COLUMNS.length, '09:00 - 10:00'),
+      createEmptyScheduleRow(DEFAULT_SCHEDULE_COLUMNS.length, '10:00 - 11:00'),
+    ],
+  };
+}
+
+function ensureWeeklySchedule(raw: unknown): WeeklySchedule {
+  const fallback = getDefaultWeeklySchedule();
+  if (!raw || typeof raw !== 'object') return fallback;
+
+  const candidate = raw as Partial<WeeklySchedule>;
+  const columnsRaw = Array.isArray(candidate.columns)
+    ? candidate.columns.map(col => normalizeLoadedText(col, '').trim()).filter(Boolean)
+    : [];
+  const columns = columnsRaw.length > 0 ? columnsRaw : fallback.columns;
+
+  const rows = Array.isArray(candidate.rows)
+    ? candidate.rows.map((row, idx) => {
+        const item = (row as unknown as Record<string, unknown>) || {};
+        const id = normalizeLoadedText(item.id, 'sched_' + generateId());
+        const timeLabel = normalizeLoadedText(item.timeLabel, '');
+        const rawCells = Array.isArray(item.cells) ? item.cells : [];
+        const cells = Array.from({ length: columns.length }, (_, colIdx) =>
+          normalizeLoadedText(rawCells[colIdx], ''),
+        );
+        return {
+          id: id || ('sched_' + generateId() + '_' + idx),
+          timeLabel,
+          cells,
+        };
+      })
+    : [];
+
+  return {
+    columns,
+    rows: rows.length > 0 ? rows : fallback.rows.map(row => ({ ...row, cells: [...row.cells] })),
+  };
+}
+
+function clampEssayScore(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.max(0, Math.min(200, Math.round(parsed)));
+}
+
+function toEssayTotal(c1: number, c2: number, c3: number, c4: number, c5: number): number {
+  return c1 + c2 + c3 + c4 + c5;
+}
+
+function ensureEssayEntry(raw: unknown): EssayEntry | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const item = raw as Record<string, unknown>;
+  const c1 = clampEssayScore(item.c1);
+  const c2 = clampEssayScore(item.c2);
+  const c3 = clampEssayScore(item.c3);
+  const c4 = clampEssayScore(item.c4);
+  const c5 = clampEssayScore(item.c5);
+  const dateCandidate = normalizeLoadedText(item.date, '').trim();
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(dateCandidate)
+    ? dateCandidate
+    : new Date().toISOString().slice(0, 10);
+  const nowIso = new Date().toISOString();
+
+  return {
+    id: normalizeLoadedText(item.id, '') || ('essay_' + generateId()),
+    theme: normalizeLoadedText(item.theme, 'Redacao sem tema').trim() || 'Redacao sem tema',
+    date,
+    c1,
+    c2,
+    c3,
+    c4,
+    c5,
+    totalScore: toEssayTotal(c1, c2, c3, c4, c5),
+    content: normalizeLoadedText(item.content, ''),
+    createdAt: normalizeLoadedText(item.createdAt, nowIso),
+    updatedAt: normalizeLoadedText(item.updatedAt, nowIso),
+  };
+}
+
+function ensureEssayMonitorSettings(raw: unknown): EssayMonitorSettings {
+  if (!raw || typeof raw !== 'object') {
+    return {
+      essays: [],
+      timerDurationMinutes: DEFAULT_ESSAY_TIMER_DURATION,
+    };
+  }
+
+  const candidate = raw as Partial<EssayMonitorSettings> & Record<string, unknown>;
+  const essays = Array.isArray(candidate.essays)
+    ? candidate.essays
+        .map(ensureEssayEntry)
+        .filter((entry): entry is EssayEntry => entry !== null)
+        .sort((a, b) => (a.date < b.date ? -1 : 1))
+    : [];
+
+  return {
+    essays,
+    timerDurationMinutes: candidate.timerDurationMinutes === 60 ? 60 : 90,
+  };
+}
+
 function getDefaultSettings(): StudyData['settings'] {
   return {
     fsrs: normalizeFSRSConfig(DEFAULT_FSRS_CONFIG),
+    schedule: getDefaultWeeklySchedule(),
+    essayMonitor: {
+      essays: [],
+      timerDurationMinutes: DEFAULT_ESSAY_TIMER_DURATION,
+    },
   };
 }
 
@@ -95,11 +235,8 @@ export function loadData(): StudyData {
         }
       }
 
-      // Ensure all default subjects exist
-      for (const def of defaultSubjects) {
-        if (!data.subjects.find((s: Subject) => s.id === def.id)) {
-          data.subjects.push({ ...def, topicGroups: [] });
-        }
+      if (!Array.isArray(data.subjects) || data.subjects.length === 0) {
+        data.subjects = defaultSubjects.map(s => ({ ...s, topicGroups: [] }));
       }
 
       const baseSettings = getDefaultSettings();
@@ -107,6 +244,8 @@ export function loadData(): StudyData {
         ...baseSettings,
         ...(data.settings || {}),
         fsrs: normalizeFSRSConfig(data.settings?.fsrs ?? baseSettings.fsrs),
+        schedule: ensureWeeklySchedule(data.settings?.schedule ?? baseSettings.schedule),
+        essayMonitor: ensureEssayMonitorSettings(data.settings?.essayMonitor ?? baseSettings.essayMonitor),
       };
 
       return data as StudyData;
@@ -379,7 +518,10 @@ export function parseStructuredImport(text: string): { name: string; topics: str
 
 export const PRIORITY_CONFIG = {
   alta: { label: 'Alta', emoji: '\u{1F534}', color: 'text-red-700', bg: 'bg-red-100', border: 'border-red-200', ring: 'ring-red-400' },
-  media: { label: 'Media', emoji: '\u{1F7E1}', color: 'text-yellow-700', bg: 'bg-yellow-100', border: 'border-yellow-200', ring: 'ring-yellow-400' },
+  media: { label: 'Média', emoji: '\u{1F7E1}', color: 'text-yellow-700', bg: 'bg-yellow-100', border: 'border-yellow-200', ring: 'ring-yellow-400' },
   baixa: { label: 'Baixa', emoji: '\u{1F7E2}', color: 'text-green-700', bg: 'bg-green-100', border: 'border-green-200', ring: 'ring-green-400' },
 } as const;
+
+
+
 
