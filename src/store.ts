@@ -1,4 +1,4 @@
-import {
+﻿import {
   StudyData,
   Subject,
   Topic,
@@ -6,8 +6,11 @@ import {
   Priority,
   ReviewEntry,
   WeeklySchedule,
+  ScheduleCellData,
   EssayEntry,
   EssayMonitorSettings,
+  StudyGoals,
+  QuestionLogEntry,
 } from './types';
 import { DEFAULT_FSRS_CONFIG, normalizeFSRSConfig } from './fsrs';
 
@@ -33,31 +36,90 @@ function normalizeLoadedText(value: unknown, fallback = ''): string {
 }
 
 const defaultSubjects: Omit<Subject, 'topicGroups'>[] = [
-  { id: 'matematica', name: 'Matematica', emoji: '\u{1F4D0}', color: '#1565c0', colorLight: '#e3f2fd' },
+  { id: 'matematica', name: 'Matemática', emoji: '\u{1F4D0}', color: '#1565c0', colorLight: '#e3f2fd' },
   { id: 'biologia', name: 'Biologia', emoji: '\u{1F9EC}', color: '#2e7d32', colorLight: '#e8f5e9' },
-  { id: 'fisica', name: 'Fisica', emoji: '\u26A1', color: '#e65100', colorLight: '#fff3e0' },
-  { id: 'quimica', name: 'Quimica', emoji: '\u{1F9EA}', color: '#6a1b9a', colorLight: '#f3e5f5' },
-  { id: 'historia', name: 'Historia', emoji: '\u{1F4DC}', color: '#5d4037', colorLight: '#efebe9' },
+  { id: 'fisica', name: 'Física', emoji: '\u26A1', color: '#e65100', colorLight: '#fff3e0' },
+  { id: 'quimica', name: 'Química', emoji: '\u{1F9EA}', color: '#6a1b9a', colorLight: '#f3e5f5' },
+  { id: 'historia', name: 'História', emoji: '\u{1F4DC}', color: '#5d4037', colorLight: '#efebe9' },
   { id: 'geografia', name: 'Geografia', emoji: '\u{1F30D}', color: '#00695c', colorLight: '#e0f2f1' },
   { id: 'filosofia_sociologia', name: 'Filosofia/Sociologia', emoji: '\u{1F9E0}', color: '#6a1b9a', colorLight: '#f3e5f5' },
 ];
 
 const DEFAULT_SCHEDULE_COLUMNS = [
   'Segunda',
-  'Terca',
+  'Terça',
   'Quarta',
   'Quinta',
   'Sexta',
-  'Sabado',
+  'Sábado',
   'Domingo',
 ];
 const DEFAULT_ESSAY_TIMER_DURATION: 60 | 90 = 90;
+const DEFAULT_STUDY_GOALS: StudyGoals = {
+  dailyQuestionsTarget: 30,
+  weeklyReviewTarget: 20,
+  weeklyEssayTarget: 1,
+};
+
+function clampInt(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, Math.round(value)));
+}
+
+function ensureGoals(raw: unknown): StudyGoals {
+  if (!raw || typeof raw !== 'object') return { ...DEFAULT_STUDY_GOALS };
+  const candidate = raw as Partial<StudyGoals> & { dailyStudyTarget?: number };
+  return {
+    dailyQuestionsTarget: clampInt(
+      Number(candidate.dailyQuestionsTarget ?? candidate.dailyStudyTarget ?? DEFAULT_STUDY_GOALS.dailyQuestionsTarget),
+      1,
+      200,
+    ),
+    weeklyReviewTarget: clampInt(Number(candidate.weeklyReviewTarget ?? DEFAULT_STUDY_GOALS.weeklyReviewTarget), 1, 100),
+    weeklyEssayTarget: clampInt(Number(candidate.weeklyEssayTarget ?? DEFAULT_STUDY_GOALS.weeklyEssayTarget), 1, 14),
+  };
+}
+
+function normalizeTopicTags(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const tags: string[] = [];
+  for (const tag of raw) {
+    const normalized = normalizeLoadedText(tag, '').replace(/\s+/g, ' ').trim();
+    if (!normalized) continue;
+    const key = normalized.toLocaleLowerCase('pt-BR');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    tags.push(normalized);
+  }
+  return tags.slice(0, 12);
+}
+
+function normalizeQuestionLogs(raw: unknown): QuestionLogEntry[] {
+  if (!Array.isArray(raw)) return [];
+  const byDate = new Map<string, QuestionLogEntry>();
+  for (const itemRaw of raw) {
+    if (!itemRaw || typeof itemRaw !== 'object') continue;
+    const item = itemRaw as Partial<QuestionLogEntry>;
+    const date = normalizeLoadedText(item.date, '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    const questionsMade = clampInt(Number(item.questionsMade ?? 0), 0, 5000);
+    const questionsCorrect = clampInt(Number(item.questionsCorrect ?? 0), 0, 5000);
+    const existing = byDate.get(date);
+    if (existing) {
+      existing.questionsMade += questionsMade;
+      existing.questionsCorrect += questionsCorrect;
+    } else {
+      byDate.set(date, { date, questionsMade, questionsCorrect });
+    }
+  }
+  return Array.from(byDate.values()).sort((a, b) => (a.date < b.date ? -1 : 1));
+}
 
 function createEmptyScheduleRow(columnsCount: number, timeLabel = '') {
   return {
     id: 'sched_' + generateId(),
     timeLabel,
-    cells: Array.from({ length: columnsCount }, () => ''),
+    cells: Array.from({ length: columnsCount }, (): ScheduleCellData => ({ text: '' })),
   };
 }
 
@@ -88,9 +150,21 @@ function ensureWeeklySchedule(raw: unknown): WeeklySchedule {
         const id = normalizeLoadedText(item.id, 'sched_' + generateId());
         const timeLabel = normalizeLoadedText(item.timeLabel, '');
         const rawCells = Array.isArray(item.cells) ? item.cells : [];
-        const cells = Array.from({ length: columns.length }, (_, colIdx) =>
-          normalizeLoadedText(rawCells[colIdx], ''),
-        );
+        const cells = Array.from({ length: columns.length }, (_, colIdx): ScheduleCellData => {
+          const rawVal = rawCells[colIdx];
+          if (typeof rawVal === 'string') {
+            return { text: normalizeLoadedText(rawVal, '') };
+          }
+          if (rawVal && typeof rawVal === 'object') {
+            const cellRaw = rawVal as Record<string, unknown>;
+            const subjectIdCandidate = normalizeLoadedText(cellRaw.subjectId, '').trim();
+            return {
+              text: normalizeLoadedText(cellRaw.text, ''),
+              subjectId: subjectIdCandidate || undefined,
+            };
+          }
+          return { text: '' };
+        });
         return {
           id: id || ('sched_' + generateId() + '_' + idx),
           timeLabel,
@@ -101,7 +175,10 @@ function ensureWeeklySchedule(raw: unknown): WeeklySchedule {
 
   return {
     columns,
-    rows: rows.length > 0 ? rows : fallback.rows.map(row => ({ ...row, cells: [...row.cells] })),
+    rows: rows.length > 0 ? rows : fallback.rows.map(row => ({
+      ...row,
+      cells: row.cells.map(cell => ({ text: cell.text, subjectId: cell.subjectId })),
+    })),
   };
 }
 
@@ -131,7 +208,7 @@ function ensureEssayEntry(raw: unknown): EssayEntry | null {
 
   return {
     id: normalizeLoadedText(item.id, '') || ('essay_' + generateId()),
-    theme: normalizeLoadedText(item.theme, 'Redacao sem tema').trim() || 'Redacao sem tema',
+    theme: normalizeLoadedText(item.theme, 'Redação sem tema').trim() || 'Redação sem tema',
     date,
     c1,
     c2,
@@ -175,6 +252,7 @@ function getDefaultSettings(): StudyData['settings'] {
       essays: [],
       timerDurationMinutes: DEFAULT_ESSAY_TIMER_DURATION,
     },
+    goals: { ...DEFAULT_STUDY_GOALS },
   };
 }
 
@@ -185,7 +263,9 @@ function ensureTopicFields(t: Record<string, unknown>): Topic {
     studied: !!(t.studied),
     questionsTotal: (t.questionsTotal as number) || 0,
     questionsCorrect: (t.questionsCorrect as number) || 0,
+    questionLogs: normalizeQuestionLogs(t.questionLogs),
     notes: normalizeLoadedText(t.notes, ''),
+    tags: normalizeTopicTags(t.tags),
     dateStudied: (t.dateStudied as string) || null,
     priority: (t.priority as Priority) || null,
     deadline: (t.deadline as string) || null,
@@ -201,64 +281,92 @@ function ensureTopicFields(t: Record<string, unknown>): Topic {
   };
 }
 
+export function normalizeStudyData(raw: unknown): StudyData {
+  const fallbackSubjects = defaultSubjects.map(s => ({ ...s, topicGroups: [] }));
+  const baseSettings = getDefaultSettings();
+
+  if (!raw || typeof raw !== 'object') {
+    return {
+      subjects: fallbackSubjects,
+      settings: baseSettings,
+      lastUpdated: new Date().toISOString(),
+    };
+  }
+
+  const data = raw as Record<string, unknown>;
+  const subjectsRaw = Array.isArray(data.subjects) ? data.subjects : [];
+  const normalizedSubjects = subjectsRaw
+    .map((subjectRaw, idx) => {
+      if (!subjectRaw || typeof subjectRaw !== 'object') return null;
+      const subject = subjectRaw as Record<string, unknown>;
+
+      const topicGroupsRaw: unknown[] = Array.isArray(subject.topicGroups)
+        ? subject.topicGroups
+        : Array.isArray(subject.topics)
+          ? [{
+              id: generateId(),
+              name: 'Geral',
+              topics: subject.topics,
+            }]
+          : [];
+
+      const topicGroups: TopicGroup[] = topicGroupsRaw
+        .map((groupRaw, groupIdx) => {
+          if (!groupRaw || typeof groupRaw !== 'object') return null;
+          const group = groupRaw as Record<string, unknown>;
+          const topicsRaw = Array.isArray(group.topics) ? group.topics : [];
+          const topics = topicsRaw
+            .map(topicRaw => (topicRaw && typeof topicRaw === 'object' ? ensureTopicFields(topicRaw as Record<string, unknown>) : null))
+            .filter((topic): topic is Topic => topic !== null);
+
+          return {
+            id: normalizeLoadedText(group.id, '') || generateId() + '_' + groupIdx,
+            name: normalizeLoadedText(group.name, 'Geral'),
+            topics,
+          };
+        })
+        .filter((group): group is TopicGroup => group !== null);
+
+      const baseSubject = defaultSubjects[idx % defaultSubjects.length];
+      return {
+        id: normalizeLoadedText(subject.id, '') || `subject_${generateId()}_${idx}`,
+        name: normalizeLoadedText(subject.name, baseSubject?.name || 'Disciplina'),
+        emoji: normalizeLoadedText(subject.emoji, baseSubject?.emoji || '\u{1F4DA}'),
+        color: normalizeLoadedText(subject.color, baseSubject?.color || '#1565c0'),
+        colorLight: normalizeLoadedText(subject.colorLight, baseSubject?.colorLight || '#e3f2fd'),
+        topicGroups,
+      } satisfies Subject;
+    })
+    .filter((subject): subject is Subject => subject !== null);
+
+  const settingsRaw = (data.settings as Record<string, unknown> | undefined) ?? {};
+  const normalizedSettings: StudyData['settings'] = {
+    ...baseSettings,
+    ...settingsRaw,
+    fsrs: normalizeFSRSConfig(settingsRaw.fsrs ?? baseSettings.fsrs),
+    schedule: ensureWeeklySchedule(settingsRaw.schedule ?? baseSettings.schedule),
+    essayMonitor: ensureEssayMonitorSettings(settingsRaw.essayMonitor ?? baseSettings.essayMonitor),
+    goals: ensureGoals(settingsRaw.goals ?? baseSettings.goals),
+  };
+
+  return {
+    subjects: normalizedSubjects.length > 0 ? normalizedSubjects : fallbackSubjects,
+    settings: normalizedSettings,
+    lastUpdated: normalizeLoadedText(data.lastUpdated, new Date().toISOString()),
+  };
+}
+
 export function loadData(): StudyData {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
-      const data = JSON.parse(raw);
-
-      for (const subject of data.subjects) {
-        subject.name = normalizeLoadedText(subject.name, subject.name || '');
-        subject.emoji = normalizeLoadedText(subject.emoji, subject.emoji || '');
-
-        // Migration: old format had topics[] directly on subject
-        if (subject.topics && !subject.topicGroups) {
-          subject.topicGroups = [];
-          if (subject.topics.length > 0) {
-            subject.topicGroups.push({
-              id: generateId(),
-              name: 'Geral',
-              topics: subject.topics.map((t: Record<string, unknown>) => ensureTopicFields(t)),
-            });
-          }
-          delete subject.topics;
-        }
-
-        // Ensure existing topic groups have proper topic fields
-        if (subject.topicGroups) {
-          for (const group of subject.topicGroups) {
-            group.name = normalizeLoadedText(group.name, group.name || '');
-            group.topics = group.topics.map((t: Record<string, unknown>) => ensureTopicFields(t));
-          }
-        } else {
-          subject.topicGroups = [];
-        }
-      }
-
-      if (!Array.isArray(data.subjects) || data.subjects.length === 0) {
-        data.subjects = defaultSubjects.map(s => ({ ...s, topicGroups: [] }));
-      }
-
-      const baseSettings = getDefaultSettings();
-      data.settings = {
-        ...baseSettings,
-        ...(data.settings || {}),
-        fsrs: normalizeFSRSConfig(data.settings?.fsrs ?? baseSettings.fsrs),
-        schedule: ensureWeeklySchedule(data.settings?.schedule ?? baseSettings.schedule),
-        essayMonitor: ensureEssayMonitorSettings(data.settings?.essayMonitor ?? baseSettings.essayMonitor),
-      };
-
-      return data as StudyData;
+      return normalizeStudyData(JSON.parse(raw));
     }
   } catch {
     // ignore
   }
 
-  return {
-    subjects: defaultSubjects.map(s => ({ ...s, topicGroups: [] })),
-    settings: getDefaultSettings(),
-    lastUpdated: new Date().toISOString(),
-  };
+  return normalizeStudyData(null);
 }
 
 export function saveData(data: StudyData) {
@@ -277,7 +385,9 @@ export function createTopic(name: string, priority: Priority | null = null, dead
     studied: false,
     questionsTotal: 0,
     questionsCorrect: 0,
+    questionLogs: [],
     notes: '',
+    tags: [],
     dateStudied: null,
     priority,
     deadline,
@@ -487,7 +597,7 @@ export function getDeadlineInfo(deadline: string | null): { text: string; classN
 
   if (diff < 0) return { text: `Atrasado (${Math.abs(diff)}d)`, className: 'text-red-700 bg-red-100', urgency: 'overdue' };
   if (diff === 0) return { text: 'Hoje!', className: 'text-orange-700 bg-orange-100', urgency: 'today' };
-  if (diff === 1) return { text: 'Amanha', className: 'text-amber-700 bg-amber-100', urgency: 'soon' };
+  if (diff === 1) return { text: 'Amanhã', className: 'text-amber-700 bg-amber-100', urgency: 'soon' };
   if (diff <= 3) return { text: `${diff} dias`, className: 'text-yellow-700 bg-yellow-100', urgency: 'soon' };
   if (diff <= 7) return { text: `${diff} dias`, className: 'text-blue-700 bg-blue-100', urgency: 'normal' };
   return { text: `${diff} dias`, className: 'text-gray-600 bg-gray-100', urgency: 'normal' };
@@ -521,6 +631,7 @@ export const PRIORITY_CONFIG = {
   media: { label: 'Média', emoji: '\u{1F7E1}', color: 'text-yellow-700', bg: 'bg-yellow-100', border: 'border-yellow-200', ring: 'ring-yellow-400' },
   baixa: { label: 'Baixa', emoji: '\u{1F7E2}', color: 'text-green-700', bg: 'bg-green-100', border: 'border-green-200', ring: 'ring-green-400' },
 } as const;
+
 
 
 

@@ -38,7 +38,7 @@ const COMPETENCIES: CompetencyDefinition[] = [
   {
     key: 'c2',
     short: 'Competencia 2',
-    title: 'Compreensao da proposta de redacao e aplicacao de conceitos de varias areas do conhecimento',
+    title: 'Compreensao da proposta de redação e aplicacao de conceitos de várias areas do conhecimento',
   },
   {
     key: 'c3',
@@ -181,7 +181,7 @@ function normalizeImportedEssay(raw: Partial<EssayEntry>): EssayEntry {
     : nowIso.slice(0, 10);
   return {
     id: raw.id || makeEssayId(),
-    theme: String(raw.theme || 'Redacao sem tema').trim() || 'Redacao sem tema',
+    theme: String(raw.theme || 'Redação sem tema').trim() || 'Redação sem tema',
     date,
     c1,
     c2,
@@ -207,7 +207,7 @@ function downloadFile(filename: string, content: string, mime: string) {
 
 function EssayLineChart({ essays }: { essays: EssayEntry[] }) {
   if (essays.length === 0) {
-    return <p className="text-xs text-gray-500 dark:text-gray-400">Sem dados ainda para o grafico de evolucao.</p>;
+    return <p className="text-xs text-gray-500 dark:text-gray-400">Sem dados ainda para o gráfico de evolução.</p>;
   }
 
   const width = 720;
@@ -315,7 +315,7 @@ export function EssayMonitor({ settings, onUpdateSettings }: EssayMonitorProps) 
       if (rounded < 120 && stats.count > 0) {
         messages.push({
           level: 'warn',
-          text: `Sua media na ${competency.short} esta baixa (${rounded}). Foque nela nas proximas redacoes.`,
+          text: `Sua media na ${competency.short} esta baixa (${rounded}). Foque nela nas próximas redações.`,
         });
       }
     }
@@ -329,8 +329,8 @@ export function EssayMonitor({ settings, onUpdateSettings }: EssayMonitorProps) 
       messages.push({
         level: 'good',
         text: stats.count === 0
-          ? 'Comece cadastrando sua primeira redacao para gerar analises automaticas.'
-          : 'Seu desempenho esta estavel. Continue praticando com foco nas competencias de menor media.',
+          ? 'Comece cadastrando sua primeira redação para gerar analises automaticas.'
+          : 'Seu desempenho está estável. Continue praticando com foco nas competências de menor média.',
       });
     }
     return messages.slice(0, 5);
@@ -437,7 +437,7 @@ export function EssayMonitor({ settings, onUpdateSettings }: EssayMonitorProps) 
   function saveDraft() {
     const theme = draft.theme.trim();
     if (!theme) {
-      pushToast('Informe o tema da redacao.', 'error');
+      pushToast('Informe o tema da redação.', 'error');
       return;
     }
 
@@ -468,7 +468,7 @@ export function EssayMonitor({ settings, onUpdateSettings }: EssayMonitorProps) 
       essays,
     });
 
-    pushToast(draft.id ? 'Redacao atualizada com sucesso.' : 'Redacao criada com sucesso.', 'success');
+    pushToast(draft.id ? 'Redação atualizada com sucesso.' : 'Redação criada com sucesso.', 'success');
     closeForm();
   }
 
@@ -480,7 +480,7 @@ export function EssayMonitor({ settings, onUpdateSettings }: EssayMonitorProps) 
       essays: settings.essays.filter(entry => entry.id !== entryId),
     });
     setPendingDeleteEssayId(null);
-    pushToast(`Redacao "${found.theme}" excluida.`, 'info');
+    pushToast(`Redação "${found.theme}" excluida.`, 'info');
   }
 
   function exportJson() {
@@ -489,14 +489,14 @@ export function EssayMonitor({ settings, onUpdateSettings }: EssayMonitorProps) 
       essays: settings.essays,
     };
     downloadFile(
-      `monitor-redacoes-${new Date().toISOString().slice(0, 10)}.json`,
+      `monitor-redações-${new Date().toISOString().slice(0, 10)}.json`,
       JSON.stringify(payload, null, 2),
       'application/json;charset=utf-8',
     );
   }
 
   function exportCsv() {
-    const header = ['id', 'tema', 'data', 'nota_total', 'c1', 'c2', 'c3', 'c4', 'c5', 'conteudo'];
+    const header = ['id', 'tema', 'data', 'nota_total', 'c1', 'c2', 'c3', 'c4', 'c5', 'conteúdo'];
     const rows = settings.essays.map(entry => [
       entry.id,
       entry.theme,
@@ -515,7 +515,7 @@ export function EssayMonitor({ settings, onUpdateSettings }: EssayMonitorProps) 
       .join('\n');
 
     downloadFile(
-      `monitor-redacoes-${new Date().toISOString().slice(0, 10)}.csv`,
+      `monitor-redações-${new Date().toISOString().slice(0, 10)}.csv`,
       csv,
       'text/csv;charset=utf-8',
     );
@@ -552,13 +552,13 @@ export function EssayMonitor({ settings, onUpdateSettings }: EssayMonitorProps) 
           c3: headers.indexOf('c3'),
           c4: headers.indexOf('c4'),
           c5: headers.indexOf('c5'),
-          content: headers.indexOf('conteudo'),
+          content: headers.indexOf('conteúdo'),
         };
         for (let i = 1; i < lines.length; i++) {
           const cols = parseCsvLine(lines[i]);
           imported.push(normalizeImportedEssay({
             id: idx.id >= 0 ? cols[idx.id] : undefined,
-            theme: idx.theme >= 0 ? cols[idx.theme] : 'Redacao importada',
+            theme: idx.theme >= 0 ? cols[idx.theme] : 'Redação importada',
             date: idx.date >= 0 ? cols[idx.date] : undefined,
             c1: idx.c1 >= 0 ? Number(cols[idx.c1]) : 0,
             c2: idx.c2 >= 0 ? Number(cols[idx.c2]) : 0,
@@ -579,7 +579,7 @@ export function EssayMonitor({ settings, onUpdateSettings }: EssayMonitorProps) 
     }
 
     if (imported.length === 0) {
-      pushToast('Nenhuma redacao valida encontrada no arquivo.', 'error');
+      pushToast('Nenhuma redação valida encontrada no arquivo.', 'error');
       return;
     }
 
@@ -597,7 +597,7 @@ export function EssayMonitor({ settings, onUpdateSettings }: EssayMonitorProps) 
       ...settings,
       essays: [...normalized, ...settings.essays],
     });
-    pushToast(`${normalized.length} redacao(oes) importada(s) com sucesso.`, 'success');
+    pushToast(`${normalized.length} redação(oes) importada(s) com sucesso.`, 'success');
   }
 
   function toggleCommand(command: 'bold' | 'italic' | 'underline') {
@@ -626,7 +626,7 @@ export function EssayMonitor({ settings, onUpdateSettings }: EssayMonitorProps) 
 
   function createDraftFromTimer() {
     openCreateForm({
-      theme: 'Simulado ENEM - Redacao',
+      theme: 'Simulado ENEM - Redação',
       date: new Date().toISOString().slice(0, 10),
       content: timerText,
     });
@@ -640,9 +640,9 @@ export function EssayMonitor({ settings, onUpdateSettings }: EssayMonitorProps) 
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <p className="text-xs uppercase tracking-[0.2em] text-sky-100/90 mb-2">ENEM Writing Suite</p>
-              <h1 className="text-2xl md:text-3xl font-extrabold leading-tight">Monitor de Redacoes</h1>
+              <h1 className="text-2xl md:text-3xl font-extrabold leading-tight">Monitor de Redações</h1>
               <p className="text-sm text-slate-100/90 mt-1">
-                Gerencie notas, evolucao por competencia e simulacoes com timer em um painel unico.
+                Gerencie notas, evolução por competência e simulações com timer em um painel único.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -650,20 +650,20 @@ export function EssayMonitor({ settings, onUpdateSettings }: EssayMonitorProps) 
                 onClick={openTimer}
                 className="rounded-xl bg-white/15 hover:bg-white/25 transition-colors px-4 py-2 text-sm font-medium inline-flex items-center gap-2"
               >
-                <Clock3 size={16} /> Iniciar Redacao com Timer
+                <Clock3 size={16} /> Iniciar Redação com Timer
               </button>
               <button
                 onClick={() => openCreateForm()}
                 className="rounded-xl bg-white text-blue-700 hover:bg-sky-50 transition-colors px-4 py-2 text-sm font-semibold inline-flex items-center gap-2"
               >
-                <Plus size={16} /> Nova Redacao
+                <Plus size={16} /> Nova Redação
               </button>
             </div>
           </div>
         </div>
       </section>
       <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <StatCard icon={<FileText size={17} />} label="Total de redacoes" value={String(stats.count)} />
+        <StatCard icon={<FileText size={17} />} label="Total de redações" value={String(stats.count)} />
         <StatCard icon={<TrendingUp size={17} />} label="Nota media" value={String(Math.round(stats.average))} />
         <StatCard icon={<Trophy size={17} />} label="Maior nota" value={String(stats.max)} />
         <StatCard icon={<Target size={17} />} label="Menor nota" value={String(stats.min)} />
@@ -722,14 +722,14 @@ export function EssayMonitor({ settings, onUpdateSettings }: EssayMonitorProps) 
           <section className="rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
             <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-700 flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-100 inline-flex items-center gap-2">
-                <FileText size={16} /> Lista de Redacoes
+                <FileText size={16} /> Lista de Redações
               </h2>
               <div className="flex flex-wrap items-center gap-2">
                 <label className="text-xs text-slate-500 dark:text-slate-400 inline-flex items-center gap-1">
                   Mostrar
                   <select
                     value={listPageSize}
-                    onChange={event => setListPage((event.target.value === '20' ? 20 : event.target.value === '30' ? 30 : 10))}
+                    onChange={event => setListPageSize(event.target.value === '20' ? 20 : event.target.value === '30' ? 30 : 10)}
                     className="rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-2 py-1 text-xs"
                   >
                     <option value={10}>10</option>
@@ -773,7 +773,7 @@ export function EssayMonitor({ settings, onUpdateSettings }: EssayMonitorProps) 
 
             {essaysSorted.length === 0 ? (
               <div className="p-8 text-center text-sm text-slate-500 dark:text-slate-400">
-                Nenhuma redacao cadastrada ainda.
+                Nenhuma redação cadastrada ainda.
               </div>
             ) : (
               <div className="overflow-x-auto overflow-y-auto max-h-[420px]">
@@ -836,7 +836,7 @@ export function EssayMonitor({ settings, onUpdateSettings }: EssayMonitorProps) 
             {essaysSorted.length > 0 && (
               <div className="px-4 py-2 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 flex items-center justify-between gap-2 text-xs">
                 <span className="text-slate-500 dark:text-slate-400">
-                  Pagina {listPage} de {totalPages} ({essaysSorted.length} redacao(oes))
+                  Pagina {listPage} de {totalPages} ({essaysSorted.length} redação(oes))
                 </span>
                 <div className="flex items-center gap-1">
                   <button
@@ -851,7 +851,7 @@ export function EssayMonitor({ settings, onUpdateSettings }: EssayMonitorProps) 
                     disabled={listPage >= totalPages}
                     className="px-2 py-1 rounded border border-slate-300 dark:border-slate-700 disabled:opacity-40"
                   >
-                    Proxima
+                    Próxima
                   </button>
                 </div>
               </div>
@@ -862,11 +862,11 @@ export function EssayMonitor({ settings, onUpdateSettings }: EssayMonitorProps) 
 
       <section className="grid grid-cols-1 xl:grid-cols-2 gap-5">
         <div className="rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 shadow-sm p-4">
-          <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-100 mb-3">Evolucao das notas totais (0-1000)</h3>
+          <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-100 mb-3">Evolução das notas totais (0-1000)</h3>
           <EssayLineChart essays={settings.essays} />
         </div>
         <div className="rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 shadow-sm p-4">
-          <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-100 mb-3">Comparativo das competencias</h3>
+          <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-100 mb-3">Comparativo das competências</h3>
           <div className="space-y-2.5">
             {stats.competencyAverages.map(competency => {
               const avg = Math.round(competency.average);
@@ -893,9 +893,9 @@ export function EssayMonitor({ settings, onUpdateSettings }: EssayMonitorProps) 
       {pendingDeleteEssayId && (
         <div className="fixed inset-0 z-[88] bg-black/40 p-4 flex items-center justify-center">
           <div className="w-full max-w-md rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 shadow-2xl p-4">
-            <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Confirmar exclusao</h3>
+            <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Confirmar exclusão</h3>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-2">
-              Deseja excluir esta redacao? Essa acao pode ser desfeita pelo botao global de Desfazer.
+              Deseja excluir esta redação? Essa acao pode ser desfeita pelo botao global de Desfazer.
             </p>
             <div className="mt-4 flex items-center justify-end gap-2">
               <button
@@ -942,7 +942,7 @@ export function EssayMonitor({ settings, onUpdateSettings }: EssayMonitorProps) 
           >
             <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
               <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-100">
-                {draft.id ? 'Editar redacao' : 'Nova redacao'}
+                {draft.id ? 'Editar redação' : 'Nova redação'}
               </h3>
               <button onClick={closeForm} className="p-1.5 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800">
                 <X size={16} />
@@ -952,7 +952,7 @@ export function EssayMonitor({ settings, onUpdateSettings }: EssayMonitorProps) 
             <div className="p-5 space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-[1fr_220px] gap-3">
                 <div>
-                  <label className="block text-xs font-medium text-slate-600 dark:text-slate-300 mb-1">Tema da redacao</label>
+                  <label className="block text-xs font-medium text-slate-600 dark:text-slate-300 mb-1">Tema da redação</label>
                   <input
                     value={draft.theme}
                     onChange={event => setDraft(prev => ({ ...prev, theme: event.target.value }))}
@@ -996,7 +996,7 @@ export function EssayMonitor({ settings, onUpdateSettings }: EssayMonitorProps) 
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-slate-600 dark:text-slate-300 mb-1">Texto da redacao (opcional)</label>
+                <label className="block text-xs font-medium text-slate-600 dark:text-slate-300 mb-1">Texto da redação (opcional)</label>
                 <div className="rounded-xl border border-slate-300 dark:border-slate-700 overflow-hidden">
                   <div className="px-2 py-1.5 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 flex items-center gap-1.5">
                     <button type="button" onClick={() => toggleCommand('bold')} className="px-2 py-1 rounded text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700">Negrito</button>
@@ -1039,7 +1039,7 @@ export function EssayMonitor({ settings, onUpdateSettings }: EssayMonitorProps) 
             onClick={event => event.stopPropagation()}
           >
             <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-100">Simulacao de redacao com timer</h3>
+              <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-100">Simulacao de redação com timer</h3>
               <button onClick={closeTimer} className="p-1.5 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800"><X size={16} /></button>
             </div>
 
@@ -1078,7 +1078,7 @@ export function EssayMonitor({ settings, onUpdateSettings }: EssayMonitorProps) 
 
               {timerFinished && (
                 <div className="rounded-xl border border-emerald-200 bg-emerald-50 dark:bg-emerald-900/30 dark:border-emerald-800 px-3 py-2 text-sm text-emerald-800 dark:text-emerald-200">
-                  Tempo encerrado! Revise o texto e salve como nova redacao.
+                  Tempo encerrado! Revise o texto e salve como nova redação.
                 </div>
               )}
 
@@ -1089,7 +1089,7 @@ export function EssayMonitor({ settings, onUpdateSettings }: EssayMonitorProps) 
                   onChange={event => setTimerText(event.target.value)}
                   rows={10}
                   className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
-                  placeholder="Escreva ou cole sua redacao aqui durante a simulacao..."
+                  placeholder="Escreva ou cole sua redação aqui durante a simulacao..."
                 />
               </div>
             </div>
@@ -1105,7 +1105,7 @@ export function EssayMonitor({ settings, onUpdateSettings }: EssayMonitorProps) 
                 onClick={createDraftFromTimer}
                 className="px-3 py-2 rounded-lg text-sm bg-blue-600 text-white hover:bg-blue-700 inline-flex items-center gap-1"
               >
-                <Save size={14} /> Salvar como redacao
+                <Save size={14} /> Salvar como redação
               </button>
             </div>
           </div>

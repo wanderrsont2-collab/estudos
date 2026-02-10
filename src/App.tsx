@@ -1,12 +1,12 @@
-﻿import { useState, useCallback, useEffect, useMemo, useRef, type FormEvent, type MouseEvent as ReactMouseEvent } from 'react';
-import { loadData, saveData, getSubjectStats, getAllTopics, getDeadlineInfo, getReviewsDue, generateId } from './store';
-import { StudyData, Subject, WeeklySchedule, EssayMonitorSettings } from './types';
+import { useState, useCallback, useEffect, useMemo, useRef, type ChangeEvent, type FormEvent, type MouseEvent as ReactMouseEvent } from 'react';
+import { loadData, saveData, getSubjectStats, getAllTopics, getDeadlineInfo, getReviewsDue, generateId, normalizeStudyData } from './store';
+import { StudyData, Subject, WeeklySchedule, EssayMonitorSettings, StudyGoals } from './types';
 import { type FSRSConfig, normalizeFSRSConfig } from './fsrs';
 import { Overview } from './components/Overview';
 import { SubjectDetail } from './components/SubjectDetail';
 import { ReviewSystem } from './components/ReviewSystem';
 import { EssayMonitor } from './components/EssayMonitor';
-import { BookOpen, LayoutDashboard, Brain, Moon, Plus, Pencil, Search, Sun, Trash2, Undo2, X, FileText } from 'lucide-react';
+import { BookOpen, LayoutDashboard, Brain, Moon, Plus, Pencil, Search, Sun, Trash2, Undo2, X, FileText, Download, Upload } from 'lucide-react';
 
 type View = 'overview' | 'subject' | 'reviews' | 'essays';
 
@@ -23,6 +23,8 @@ const SUBJECT_EMOJI_PALETTE = [
 
 const BACKUPS_STORAGE_KEY = 'enem2025_backups_v1';
 const BACKUP_SCHEMA_VERSION = 'study-data-v1';
+const BACKUP_FILE_KIND = 'enem2025-backup';
+const BACKUP_FILE_VERSION = 2;
 const MAX_BACKUPS = 20;
 
 interface BackupEntry {
@@ -65,7 +67,18 @@ interface SearchResultItem {
   subjectId: string;
   title: string;
   subtitle: string;
-  type: 'subject' | 'topic';
+  type: 'subject' | 'topic' | 'tag';
+  topicId?: string;
+  score: number;
+}
+
+interface BackupFilePayload {
+  kind: typeof BACKUP_FILE_KIND;
+  version: number;
+  schemaVersion: string;
+  exportedAt: string;
+  currentData: StudyData;
+  backups: BackupEntry[];
 }
 
 function toColorLight(hexColor: string): string {
@@ -95,10 +108,37 @@ function loadBackups(): BackupEntry[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw) as BackupEntry[];
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(item => item && item.schemaVersion === BACKUP_SCHEMA_VERSION);
+    return parsed
+      .filter(item => item && item.schemaVersion === BACKUP_SCHEMA_VERSION)
+      .map(item => ({
+        ...item,
+        data: normalizeStudyData(item.data),
+      }));
   } catch {
     return [];
   }
+}
+
+function triggerJsonDownload(filename: string, payload: unknown) {
+  const json = JSON.stringify(payload, null, 2);
+  const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+function containsAllTokens(text: string, tokens: string[]): boolean {
+  return tokens.every(token => text.includes(token));
+}
+
+function scoreTextMatch(text: string, query: string): number {
+  if (text === query) return 120;
+  if (text.startsWith(query)) return 90;
+  if (text.includes(query)) return 50;
+  return 0;
 }
 
 export function App() {
@@ -121,6 +161,7 @@ export function App() {
   const [backups, setBackups] = useState<BackupEntry[]>(() => loadBackups());
   const [selectedBackupId, setSelectedBackupId] = useState<string>('');
   const [globalSearchQuery, setGlobalSearchQuery] = useState('');
+  const [globalSearchType, setGlobalSearchType] = useState<'all' | 'subject' | 'topic' | 'tag'>('all');
 
   const [subjectContextMenu, setSubjectContextMenu] = useState<SubjectContextMenuState | null>(null);
   const [isCreateSubjectOpen, setIsCreateSubjectOpen] = useState(false);
@@ -129,6 +170,7 @@ export function App() {
   const [newSubjectColor, setNewSubjectColor] = useState<string>('#1565c0');
   const lastBackupHashRef = useRef('');
   const globalSearchRef = useRef<HTMLInputElement | null>(null);
+  const backupImportInputRef = useRef<HTMLInputElement | null>(null);
 
   function pushToast(message: string, tone: ToastItem['tone'] = 'info') {
     setToasts(prev => [
@@ -157,6 +199,25 @@ export function App() {
   function persistBackups(next: BackupEntry[]) {
     setBackups(next);
     window.localStorage.setItem(BACKUPS_STORAGE_KEY, JSON.stringify(next));
+  }
+
+  function normalizeBackupEntry(raw: unknown, fallbackReason: BackupEntry['reason'] = 'manual'): BackupEntry | null {
+    if (!raw || typeof raw !== 'object') return null;
+    const candidate = raw as Partial<BackupEntry> & Record<string, unknown>;
+    const normalizedData = normalizeStudyData(candidate.data);
+    return {
+      id: typeof candidate.id === 'string' && candidate.id.trim().length > 0
+        ? candidate.id
+        : `backup_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+      createdAt: typeof candidate.createdAt === 'string' && candidate.createdAt
+        ? candidate.createdAt
+        : new Date().toISOString(),
+      reason: candidate.reason === 'auto' ? 'auto' : fallbackReason,
+      schemaVersion: typeof candidate.schemaVersion === 'string' && candidate.schemaVersion
+        ? candidate.schemaVersion
+        : BACKUP_SCHEMA_VERSION,
+      data: normalizedData,
+    };
   }
 
   function createBackup(reason: 'auto' | 'manual') {
@@ -225,7 +286,7 @@ export function App() {
       createBackup('auto');
     }, 120000);
     return () => window.clearTimeout(timer);
-  }, [data]); // backup automatico apos 2 min sem novas mudancas
+  }, [data]); // backup automático apos 2 min sem novas mudancas
 
   useEffect(() => {
     if (selectedBackupId && !backups.some(item => item.id === selectedBackupId)) {
@@ -246,7 +307,7 @@ export function App() {
 
   const updateSubject = useCallback(
     (updated: Subject) => {
-      applyDataChange('Atualizacao de disciplina', prev => ({
+      applyDataChange('Atualização de disciplina', prev => ({
         ...prev,
         subjects: prev.subjects.map(s => (s.id === updated.id ? updated : s)),
       }));
@@ -255,7 +316,7 @@ export function App() {
   );
 
   const updateFsrsConfig = useCallback((nextConfig: FSRSConfig) => {
-    applyDataChange('Configuracao FSRS', prev => ({
+    applyDataChange('Configuração FSRS', prev => ({
       ...prev,
       settings: {
         ...prev.settings,
@@ -265,7 +326,7 @@ export function App() {
   }, []);
 
   const updateSchedule = useCallback((nextSchedule: WeeklySchedule) => {
-    applyDataChange('Atualizacao do cronograma', prev => ({
+    applyDataChange('Atualização do cronograma', prev => ({
       ...prev,
       settings: {
         ...prev.settings,
@@ -275,11 +336,21 @@ export function App() {
   }, []);
 
   const updateEssayMonitor = useCallback((nextEssayMonitor: EssayMonitorSettings) => {
-    applyDataChange('Monitor de redacoes', prev => ({
+    applyDataChange('Monitor de redações', prev => ({
       ...prev,
       settings: {
         ...prev.settings,
         essayMonitor: nextEssayMonitor,
+      },
+    }));
+  }, []);
+
+  const updateGoals = useCallback((nextGoals: StudyGoals) => {
+    applyDataChange('Atualização de metas', prev => ({
+      ...prev,
+      settings: {
+        ...prev.settings,
+        goals: nextGoals,
       },
     }));
   }, []);
@@ -290,39 +361,93 @@ export function App() {
     ? data.subjects.find(s => s.id === subjectContextMenu.subjectId) || null
     : null;
   const globalSearchResults = useMemo(() => {
-    const query = globalSearchQuery.trim().toLowerCase();
-    if (query.length < 2) return [] as SearchResultItem[];
+    const rawQuery = globalSearchQuery.trim().toLocaleLowerCase('pt-BR');
+    if (rawQuery.length < 2) return [] as SearchResultItem[];
+    const tokens = rawQuery.split(/\s+/).filter(Boolean);
+    const tagOnlyQuery = rawQuery.startsWith('#') ? rawQuery.slice(1).trim() : '';
 
     const results: SearchResultItem[] = [];
     for (const subject of data.subjects) {
-      if (subject.name.toLowerCase().includes(query)) {
+      const subjectText = `${subject.name} ${subject.emoji}`.toLocaleLowerCase('pt-BR');
+      if (globalSearchType !== 'topic' && globalSearchType !== 'tag' && containsAllTokens(subjectText, tokens)) {
         results.push({
           id: `subject-${subject.id}`,
           subjectId: subject.id,
+          type: 'subject',
           title: `${subject.emoji} ${subject.name}`,
           subtitle: 'Disciplina',
-          type: 'subject',
+          score: scoreTextMatch(subject.name.toLocaleLowerCase('pt-BR'), rawQuery),
         });
       }
+
       for (const group of subject.topicGroups) {
         for (const topic of group.topics) {
-          if (topic.name.toLowerCase().includes(query)) {
+          const tags = topic.tags ?? [];
+          const tagsText = tags.join(' ');
+          const topicText = [
+            subject.name,
+            group.name,
+            topic.name,
+            topic.notes,
+            tagsText,
+            topic.priority ?? '',
+            topic.deadline ?? '',
+          ]
+            .join(' ')
+            .toLocaleLowerCase('pt-BR');
+
+          const matchesTopicScope = globalSearchType === 'all' || globalSearchType === 'topic';
+          if (matchesTopicScope && containsAllTokens(topicText, tokens)) {
+            const isDue = topic.fsrsNextReview ? new Date(topic.fsrsNextReview + 'T00:00:00') <= new Date() : false;
+            const metaBits = [
+              `${subject.name} -> ${group.name}`,
+              tags.length > 0 ? `#${tags.join(' #')}` : '',
+              topic.priority ? `Prioridade: ${topic.priority}` : '',
+              topic.deadline ? `Prazo: ${topic.deadline}` : '',
+              isDue ? 'Revisão pendente' : '',
+            ].filter(Boolean);
+
             results.push({
               id: `topic-${topic.id}`,
               subjectId: subject.id,
-              title: `${subject.emoji} ${topic.name}`,
-              subtitle: `${subject.name} -> ${group.name}`,
+              topicId: topic.id,
               type: 'topic',
+              title: `${subject.emoji} ${topic.name}`,
+              subtitle: metaBits.join(' | '),
+              score:
+                scoreTextMatch(topic.name.toLocaleLowerCase('pt-BR'), rawQuery) +
+                scoreTextMatch(group.name.toLocaleLowerCase('pt-BR'), rawQuery) +
+                (tags.some(tag => tag.toLocaleLowerCase('pt-BR').includes(rawQuery)) ? 24 : 0),
             });
+          }
+
+          const matchesTagScope = globalSearchType === 'all' || globalSearchType === 'tag';
+          if (matchesTagScope) {
+            for (const tag of tags) {
+              const normalizedTag = tag.toLocaleLowerCase('pt-BR');
+              if (tagOnlyQuery && !normalizedTag.includes(tagOnlyQuery)) continue;
+              if (!tagOnlyQuery && !containsAllTokens(normalizedTag, tokens)) continue;
+              results.push({
+                id: `tag-${topic.id}-${tag}`,
+                subjectId: subject.id,
+                topicId: topic.id,
+                type: 'tag',
+                title: `#${tag} - ${topic.name}`,
+                subtitle: `${subject.name} -> ${group.name}`,
+                score: 80 + scoreTextMatch(normalizedTag, tagOnlyQuery || rawQuery),
+              });
+            }
           }
         }
       }
     }
 
-    return results.slice(0, 30);
-  }, [data.subjects, globalSearchQuery]);
+    return results
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 40);
+  }, [data.subjects, globalSearchQuery, globalSearchType]);
 
-  function navigateToSubject(id: string) {
+  function navigateToSubject(id: string, _topicId?: string) {
     setSelectedSubjectId(id);
     setView('subject');
     setSidebarOpen(false);
@@ -391,7 +516,7 @@ export function App() {
       topicGroups: [],
     };
 
-    applyDataChange('Criacao de disciplina', prev => ({
+    applyDataChange('Criação de disciplina', prev => ({
       ...prev,
       subjects: [...prev.subjects, newSubject],
     }));
@@ -441,7 +566,7 @@ export function App() {
       confirmLabel: 'Excluir',
       tone: 'danger',
       onConfirm: () => {
-        applyDataChange('Exclusao de disciplina', prev => ({
+        applyDataChange('Exclusão de disciplina', prev => ({
           ...prev,
           subjects: prev.subjects.filter(s => s.id !== subjectId),
         }));
@@ -488,6 +613,83 @@ export function App() {
     });
   }
 
+  function exportBackupsToFile() {
+    const payload: BackupFilePayload = {
+      kind: BACKUP_FILE_KIND,
+      version: BACKUP_FILE_VERSION,
+      schemaVersion: BACKUP_SCHEMA_VERSION,
+      exportedAt: new Date().toISOString(),
+      currentData: cloneStudyData(data),
+      backups,
+    };
+    triggerJsonDownload(`enem2025-backup-v${BACKUP_FILE_VERSION}-${new Date().toISOString().slice(0, 10)}.json`, payload);
+    pushToast('Backup exportado para arquivo.', 'success');
+  }
+
+  async function importBackupsFromFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    let parsed: unknown;
+    try {
+      const text = await file.text();
+      parsed = JSON.parse(text);
+    } catch {
+      pushToast('Arquivo invalido. Use um JSON de backup exportado pelo app.', 'error');
+      return;
+    }
+
+    let importedData: StudyData | null = null;
+    let importedBackups: BackupEntry[] = [];
+
+    if (parsed && typeof parsed === 'object' && (parsed as Record<string, unknown>).kind === BACKUP_FILE_KIND) {
+      const payload = parsed as Partial<BackupFilePayload> & Record<string, unknown>;
+      importedData = normalizeStudyData(payload.currentData);
+      importedBackups = Array.isArray(payload.backups)
+        ? payload.backups
+            .map(item => normalizeBackupEntry(item, 'manual'))
+            .filter((item): item is BackupEntry => item !== null)
+            .slice(0, MAX_BACKUPS)
+        : [];
+    } else if (parsed && typeof parsed === 'object' && Array.isArray((parsed as Record<string, unknown>).subjects)) {
+      importedData = normalizeStudyData(parsed);
+      importedBackups = [
+        {
+          id: `backup_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+          createdAt: new Date().toISOString(),
+          reason: 'manual',
+          schemaVersion: BACKUP_SCHEMA_VERSION,
+          data: importedData,
+        },
+      ];
+    } else {
+      pushToast('Formato nao reconhecido. Exporte um backup versionado para importar.', 'error');
+      return;
+    }
+
+    setConfirmDialog({
+      title: 'Importar backup',
+      message: 'Deseja substituir os dados atuais pelos dados do arquivo importado?',
+      confirmLabel: 'Importar',
+      onConfirm: () => {
+        if (!importedData) return;
+        setUndoStack(prev => [
+          ...prev.slice(-29),
+          {
+            id: `undo_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            label: 'Importacao de backup',
+            snapshot: cloneStudyData(data),
+            createdAt: new Date().toISOString(),
+          },
+        ]);
+        setData(cloneStudyData(importedData));
+        persistBackups(importedBackups.length > 0 ? importedBackups : backups);
+        pushToast('Backup importado com sucesso.', 'success');
+      },
+    });
+  }
+
   const contextMenuPosition = subjectContextMenu
     ? {
         left: Math.max(8, Math.min(subjectContextMenu.x, window.innerWidth - 176)),
@@ -521,19 +723,34 @@ export function App() {
                   ref={globalSearchRef}
                   value={globalSearchQuery}
                   onChange={event => setGlobalSearchQuery(event.target.value)}
-                  placeholder="Buscar assunto... (Ctrl+K)"
-                  className="w-64 bg-transparent text-sm text-white placeholder:text-white/70 outline-none"
+                  placeholder="Buscar assuntos, tags e notas... (Ctrl+K)"
+                  className="w-56 bg-transparent text-sm text-white placeholder:text-white/70 outline-none"
                 />
+                <select
+                  value={globalSearchType}
+                  onChange={event => setGlobalSearchType(event.target.value as 'all' | 'subject' | 'topic' | 'tag')}
+                  className="rounded-md border border-white/20 bg-white/10 px-1.5 py-0.5 text-[11px] text-white/90"
+                >
+                  <option value="all" className="text-slate-900">Tudo</option>
+                  <option value="subject" className="text-slate-900">Disciplinas</option>
+                  <option value="topic" className="text-slate-900">Assuntos</option>
+                  <option value="tag" className="text-slate-900">Tags</option>
+                </select>
               </div>
               {globalSearchResults.length > 0 && (
                 <div className="absolute top-full mt-1 w-full rounded-xl border border-slate-700 bg-slate-900/95 backdrop-blur-md shadow-2xl max-h-72 overflow-y-auto">
                   {globalSearchResults.map(item => (
                     <button
                       key={item.id}
-                      onClick={() => navigateToSubject(item.subjectId)}
+                      onClick={() => navigateToSubject(item.subjectId, item.topicId)}
                       className="w-full text-left px-3 py-2 hover:bg-white/10 transition-colors border-b border-white/5 last:border-b-0"
                     >
-                      <p className="text-sm text-white font-medium truncate">{item.title}</p>
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm text-white font-medium truncate">{item.title}</p>
+                        <span className="text-[10px] uppercase tracking-wide rounded-full px-1.5 py-0.5 bg-white/10 text-white/70 shrink-0">
+                          {item.type}
+                        </span>
+                      </div>
                       <p className="text-[11px] text-slate-300 truncate">{item.subtitle}</p>
                     </button>
                   ))}
@@ -564,7 +781,7 @@ export function App() {
               }`}
             >
               <Brain size={16} />
-              <span className="hidden sm:inline">Revisoes</span>
+              <span className="hidden sm:inline">Revisões</span>
               {reviewsDueCount > 0 && (
                 <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-[10px] font-bold rounded-full w-5 h-5 flex items-center justify-center animate-pulse">
                   {reviewsDueCount}
@@ -578,7 +795,7 @@ export function App() {
               }`}
             >
               <FileText size={16} />
-              <span className="hidden sm:inline">Monitor de Redacoes</span>
+              <span className="hidden sm:inline">Monitor de Redações</span>
             </button>
             <button
               onClick={navigateToOverview}
@@ -587,7 +804,7 @@ export function App() {
               }`}
             >
               <LayoutDashboard size={16} />
-              <span className="hidden sm:inline">Visao Geral</span>
+              <span className="hidden sm:inline">Visão Geral</span>
             </button>
           </div>
         </div>
@@ -612,7 +829,7 @@ export function App() {
             >
               <Brain size={20} />
               <div className="flex-1 text-left">
-                <p className="font-medium">Revisoes FSRS</p>
+                <p className="font-medium">Revisões FSRS</p>
                 <p className={`text-xs ${view === 'reviews' ? 'text-purple-200' : 'text-purple-500'}`}>
                   {reviewsDueCount > 0 ? `${'\u{1F514}'} ${reviewsDueCount} pendente(s)` : `${'\u2705'} Em dia`}
                 </p>
@@ -636,7 +853,7 @@ export function App() {
             >
               <FileText size={20} />
               <div className="flex-1 text-left">
-                <p className="font-medium">Monitor de Redacoes</p>
+                <p className="font-medium">Monitor de Redações</p>
                 <p className={`text-xs ${view === 'essays' ? 'text-cyan-100' : 'text-cyan-600'}`}>
                   {data.settings.essayMonitor.essays.length} registrada(s)
                 </p>
@@ -699,11 +916,11 @@ export function App() {
                           <span className={`w-2 h-2 rounded-full shrink-0 ${isActive ? 'bg-red-300' : 'bg-red-400'}`} title={`${highPrioCount} prioridade(s) alta(s)`} />
                         )}
                         {reviewsDue > 0 && (
-                          <span className={`w-2 h-2 rounded-full shrink-0 ${isActive ? 'bg-purple-300' : 'bg-purple-500'}`} title={`${reviewsDue} revisao(oes)`} />
+                          <span className={`w-2 h-2 rounded-full shrink-0 ${isActive ? 'bg-purple-300' : 'bg-purple-500'}`} title={`${reviewsDue} revisão(oes)`} />
                         )}
                       </div>
                       <p className={`text-xs ${isActive ? 'text-white/70' : 'text-gray-400'}`}>
-                        {stats.studied}/{stats.total} estudados | {subject.topicGroups.length} topico{subject.topicGroups.length !== 1 ? 's' : ''}
+                        {stats.studied}/{stats.total} estudados | {subject.topicGroups.length} tópico{subject.topicGroups.length !== 1 ? 's' : ''}
                       </p>
                     </div>
                     {stats.total > 0 && (
@@ -727,7 +944,7 @@ export function App() {
           <div className="p-4 border-t border-gray-100 dark:border-slate-700">
             <div className="bg-purple-50 dark:bg-purple-900/25 rounded-xl p-3 text-xs text-purple-700 dark:text-purple-200">
               <p className="font-bold mb-1">{'\u{1F9E0}'} Dica FSRS</p>
-              <p>Marque assuntos como estudados e inicie revisoes para otimizar sua retencao de conteudo!</p>
+              <p>Marque assuntos como estudados e inicie revisões para otimizar sua retenção de conteúdo!</p>
             </div>
             <div className="mt-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40 p-3 space-y-2">
               <p className="text-xs font-semibold text-slate-600 dark:text-slate-300">Backups</p>
@@ -737,6 +954,27 @@ export function App() {
               >
                 Criar backup agora
               </button>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={exportBackupsToFile}
+                  className="px-2.5 py-1.5 rounded-lg text-xs bg-sky-600 text-white hover:bg-sky-700 inline-flex items-center justify-center gap-1"
+                >
+                  <Download size={12} /> Exportar
+                </button>
+                <button
+                  onClick={() => backupImportInputRef.current?.click()}
+                  className="px-2.5 py-1.5 rounded-lg text-xs bg-slate-700 text-white hover:bg-slate-800 inline-flex items-center justify-center gap-1"
+                >
+                  <Upload size={12} /> Importar
+                </button>
+                <input
+                  ref={backupImportInputRef}
+                  type="file"
+                  accept=".json,application/json"
+                  className="hidden"
+                  onChange={importBackupsFromFile}
+                />
+              </div>
               <select
                 value={selectedBackupId}
                 onChange={event => setSelectedBackupId(event.target.value)}
@@ -794,7 +1032,10 @@ export function App() {
             <Overview
               subjects={data.subjects}
               schedule={data.settings.schedule}
+              goals={data.settings.goals}
+              essays={data.settings.essayMonitor.essays}
               onUpdateSchedule={updateSchedule}
+              onUpdateGoals={updateGoals}
               onSelectSubject={navigateToSubject}
               onOpenReviews={navigateToReviews}
             />
@@ -1005,7 +1246,7 @@ export function App() {
             }`}
           >
             <LayoutDashboard size={20} />
-            Visao Geral
+            Visão Geral
           </button>
           <button
             onClick={navigateToReviews}
@@ -1014,7 +1255,7 @@ export function App() {
             }`}
           >
             <Brain size={20} />
-            Revisoes
+            Revisões
             {reviewsDueCount > 0 && (
               <span className="absolute top-1.5 right-1/4 bg-red-500 text-white text-[8px] font-bold rounded-full w-4 h-4 flex items-center justify-center">
                 {reviewsDueCount}
@@ -1028,7 +1269,7 @@ export function App() {
             }`}
           >
             <FileText size={20} />
-            Redacoes
+            Redações
           </button>
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
@@ -1044,4 +1285,6 @@ export function App() {
     </div>
   );
 }
+
+
 

@@ -1,4 +1,4 @@
-﻿import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Subject, Topic, TopicGroup, Priority, type ReviewEntry } from '../types';
 import {
   createTopic, createTopicGroup, getSubjectStats, getGroupStats, generateId,
@@ -18,7 +18,7 @@ import {
 import {
   ArrowLeft, Plus, Trash2, Check, X, BookOpen, Edit3, Save,
   ChevronDown, ChevronRight, FolderPlus, Calendar, AlertTriangle,
-  Clock, Flag, Brain, Sparkles,
+  Clock, Flag, Brain, Sparkles, Tag,
 } from 'lucide-react';
 
 interface SubjectDetailProps {
@@ -128,6 +128,10 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
     const stored = window.localStorage.getItem(`subject_priority_filter_${subject.id}`);
     return stored === 'alta' || stored === 'media' || stored === 'baixa' ? stored : 'all';
   });
+  const [tagFilter, setTagFilter] = useState<string>(() => {
+    const stored = window.localStorage.getItem(`subject_tag_filter_${subject.id}`);
+    return stored && stored.trim().length > 0 ? stored : 'all';
+  });
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [editGroupName, setEditGroupName] = useState('');
   const [editingTopicId, setEditingTopicId] = useState<string | null>(null);
@@ -141,9 +145,19 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
   const [priorityMenuTopic, setPriorityMenuTopic] = useState<string | null>(null);
   const [expandedTopics, setExpandedTopics] = useState<Set<string>>(new Set());
   const [studyPopup, setStudyPopup] = useState<StudyPopupState | null>(null);
+  const [tagInputs, setTagInputs] = useState<Record<string, string>>({});
 
   const stats = getSubjectStats(subject);
   const allTopics = getAllTopics(subject);
+  const allAvailableTags = useMemo(() => {
+    const unique = new Set<string>();
+    for (const topic of allTopics) {
+      for (const tag of topic.tags ?? []) {
+        unique.add(tag);
+      }
+    }
+    return Array.from(unique).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  }, [allTopics]);
 
   function updateTopicGroups(updater: (groups: TopicGroup[]) => TopicGroup[]) {
     onUpdate({
@@ -312,6 +326,68 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
     setPriorityMenuTopic(null);
   }
 
+  function updateTopicQuestionProgress(groupId: string, topicId: string, nextTotal: number, nextCorrect: number) {
+    const topic = findTopic(groupId, topicId);
+    if (!topic) return;
+
+    const safeTotal = Math.max(0, nextTotal);
+    const safeCorrect = Math.max(0, Math.min(safeTotal, nextCorrect));
+    const deltaMade = Math.max(0, safeTotal - topic.questionsTotal);
+    const deltaCorrect = Math.max(0, safeCorrect - topic.questionsCorrect);
+    const today = toDateOnlyString(new Date());
+    const nextLogs = [...(topic.questionLogs ?? [])];
+
+    if (deltaMade > 0 || deltaCorrect > 0) {
+      const existingLogIdx = nextLogs.findIndex(log => log.date === today);
+      if (existingLogIdx >= 0) {
+        const existing = nextLogs[existingLogIdx];
+        nextLogs[existingLogIdx] = {
+          ...existing,
+          questionsMade: existing.questionsMade + deltaMade,
+          questionsCorrect: existing.questionsCorrect + deltaCorrect,
+        };
+      } else {
+        nextLogs.push({
+          date: today,
+          questionsMade: deltaMade,
+          questionsCorrect: deltaCorrect,
+        });
+      }
+    }
+
+    updateTopicInGroup(groupId, topicId, {
+      questionsTotal: safeTotal,
+      questionsCorrect: safeCorrect,
+      questionLogs: nextLogs,
+    });
+  }
+
+  function normalizeTag(tag: string): string {
+    return tag.replace(/\s+/g, ' ').trim();
+  }
+
+  function addTagToTopic(groupId: string, topicId: string, rawTag: string) {
+    const normalized = normalizeTag(rawTag);
+    if (!normalized) return;
+    const topic = findTopic(groupId, topicId);
+    if (!topic) return;
+    const existingTags = topic.tags ?? [];
+    const exists = existingTags.some(tag => tag.toLocaleLowerCase('pt-BR') === normalized.toLocaleLowerCase('pt-BR'));
+    if (exists) return;
+    updateTopicInGroup(groupId, topicId, {
+      tags: [...existingTags, normalized].slice(0, 12),
+    });
+    setTagInputs(prev => ({ ...prev, [topicId]: '' }));
+  }
+
+  function removeTagFromTopic(groupId: string, topicId: string, tagToRemove: string) {
+    const topic = findTopic(groupId, topicId);
+    if (!topic) return;
+    updateTopicInGroup(groupId, topicId, {
+      tags: (topic.tags ?? []).filter(tag => tag !== tagToRemove),
+    });
+  }
+
   function startTopicEdit(topic: Topic) {
     setEditingTopicId(topic.id);
     setEditTopicName(topic.name);
@@ -348,6 +424,10 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
       if (statusFilter === 'studied' && !t.studied) return false;
       if (statusFilter === 'pending' && t.studied) return false;
       if (priorityFilter !== 'all' && t.priority !== priorityFilter) return false;
+      if (tagFilter !== 'all') {
+        const tags = t.tags ?? [];
+        if (!tags.some(tag => tag.toLocaleLowerCase('pt-BR') === tagFilter.toLocaleLowerCase('pt-BR'))) return false;
+      }
       return true;
     });
   }
@@ -370,6 +450,27 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
     window.localStorage.setItem(`subject_priority_filter_${subject.id}`, priorityFilter);
   }, [priorityFilter, subject.id]);
 
+  useEffect(() => {
+    window.localStorage.setItem(`subject_tag_filter_${subject.id}`, tagFilter);
+  }, [tagFilter, subject.id]);
+
+  useEffect(() => {
+    const statusStored = window.localStorage.getItem(`subject_status_filter_${subject.id}`);
+    setStatusFilter(statusStored === 'studied' || statusStored === 'pending' ? statusStored : 'all');
+
+    const priorityStored = window.localStorage.getItem(`subject_priority_filter_${subject.id}`);
+    setPriorityFilter(priorityStored === 'alta' || priorityStored === 'media' || priorityStored === 'baixa' ? priorityStored : 'all');
+
+    const tagStored = window.localStorage.getItem(`subject_tag_filter_${subject.id}`);
+    setTagFilter(tagStored && tagStored.trim().length > 0 ? tagStored : 'all');
+  }, [subject.id]);
+
+  useEffect(() => {
+    if (tagFilter === 'all') return;
+    if (allAvailableTags.includes(tagFilter)) return;
+    setTagFilter('all');
+  }, [allAvailableTags, tagFilter]);
+
   return (
     <div className="space-y-6 pb-20 lg:pb-6">
       {/* Header */}
@@ -383,13 +484,13 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
             onClick={onBack}
             className="flex items-center gap-2 text-white/80 hover:text-white mb-3 transition-colors text-sm"
           >
-            <ArrowLeft size={18} /> Voltar para Visao Geral
+            <ArrowLeft size={18} /> Voltar para Visão Geral
           </button>
           <h1 className="text-2xl md:text-3xl font-bold">
             {subject.emoji} {subject.name}
           </h1>
           <p className="text-white/70 mt-1 text-sm">
-            Gerencie topicos, assuntos, prioridades, prazos e revisoes
+            Gerencie tópicos, assuntos, prioridades, prazos e revisões
           </p>
           {/* Alerts */}
           <div className="flex flex-wrap gap-2 mt-3">
@@ -405,7 +506,7 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
             )}
             {reviewsDueCount > 0 && (
               <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-purple-500/20 text-white text-xs font-medium">
-                {"\u{1F9E0}"} {reviewsDueCount} revisao(oes) pendente(s)
+                {"\u{1F9E0}"} {reviewsDueCount} revisão(oes) pendente(s)
               </span>
             )}
           </div>
@@ -417,10 +518,10 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
         {[
           { label: '\u{1F4DA} Estudados', value: stats.studied },
           { label: '\u{1F4CB} Total', value: stats.total },
-          { label: '\u{1F4C1} Topicos', value: subject.topicGroups.length },
-          { label: '\u{1F4DD} Questoes', value: stats.questionsTotal },
+          { label: '\u{1F4C1} Tópicos', value: subject.topicGroups.length },
+          { label: '\u{1F4DD} Questões', value: stats.questionsTotal },
           { label: '\u{1F4CA} Rendimento', value: formatPercent(stats.rendimento) },
-          { label: '\u{1F9E0} Revisoes', value: stats.reviewsDue > 0 ? `${stats.reviewsDue} \u{1F514}` : '0' },
+          { label: '\u{1F9E0} Revisões', value: stats.reviewsDue > 0 ? `${stats.reviewsDue} \u{1F514}` : '0' },
         ].map((card, i) => (
           <div key={i} className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 text-center">
             <p className="text-xs text-gray-500 font-medium mb-1">{card.label}</p>
@@ -437,7 +538,7 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
         </div>
         <ProgressBar value={stats.progresso} color={subject.color} />
         <p className="text-xs text-gray-400 mt-2 text-center italic">
-          {stats.studied} de {stats.total} conteudos estudados
+          {stats.studied} de {stats.total} conteúdos estudados
         </p>
       </div>
 
@@ -445,10 +546,10 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 space-y-3">
         <h3 className="font-bold text-gray-800 flex items-center gap-2">
           <FolderPlus size={18} style={{ color: subject.color }} />
-          Adicionar Topico
+          Adicionar Tópico
         </h3>
         <p className="text-xs text-gray-500">
-          Crie topicos para organizar seus assuntos (ex: "Matematica Basica", "Geometria", "Algebra")
+          Crie tópicos para organizar seus assuntos (ex: "Matemática Basica", "Geometria", "Algebra")
         </p>
         <div className="flex gap-2">
           <input
@@ -456,7 +557,7 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
             value={newGroupName}
             onChange={e => setNewGroupName(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && addGroup()}
-            placeholder='Nome do topico (ex: "Matematica Basica")'
+            placeholder='Nome do tópico (ex: "Matemática Basica")'
             className="flex-1 border border-gray-300 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:border-transparent"
             style={getRingColorStyle(subject.color)}
           />
@@ -476,18 +577,18 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
           className="text-sm hover:underline transition-colors flex items-center gap-1"
           style={{ color: subject.color }}
         >
-          {showStructuredImport ? 'Fechar importacao' : '\u{1F4CB} Importar estrutura completa (topicos + assuntos)'}
+          {showStructuredImport ? 'Fechar importacao' : '\u{1F4CB} Importar estrutura completa (tópicos + assuntos)'}
         </button>
 
         {showStructuredImport && (
           <div className="space-y-2 bg-gray-50 rounded-lg p-4">
             <p className="text-xs text-gray-600">
-              Use <code className="bg-gray-200 px-1 rounded">#</code> para criar topicos e linhas simples para assuntos:
+              Use <code className="bg-gray-200 px-1 rounded">#</code> para criar tópicos e linhas simples para assuntos:
             </p>
             <textarea
               value={structuredImportText}
               onChange={e => setStructuredImportText(e.target.value)}
-              placeholder={`# Matematica Basica\nQuatro operacoes\nFracoes\nPotenciacao\n\n# Geometria\nAreas\nVolumes\nTriangulos`}
+              placeholder={`# Matemática Basica\nQuatro operacoes\nFracoes\nPotenciacao\n\n# Geometria\nAreas\nVolumes\nTriangulos`}
               className="w-full border border-gray-300 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:border-transparent h-40 resize-y font-mono"
               style={getRingColorStyle(subject.color)}
             />
@@ -553,6 +654,22 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
               </button>
             );
           })}
+
+          <span className="text-gray-300 mx-1">|</span>
+
+          <span className="text-xs font-medium text-gray-500 uppercase tracking-wider mr-1 inline-flex items-center gap-1">
+            <Tag size={12} /> Tag:
+          </span>
+          <select
+            value={tagFilter}
+            onChange={event => setTagFilter(event.target.value)}
+            className="px-2.5 py-1.5 rounded-lg text-xs bg-white border border-gray-200 text-gray-600 hover:border-gray-300"
+          >
+            <option value="all">Todas</option>
+            {allAvailableTags.map(tag => (
+              <option key={tag} value={tag}>#{tag}</option>
+            ))}
+          </select>
         </div>
       )}
 
@@ -560,9 +677,9 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
       {subject.topicGroups.length === 0 ? (
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-8 text-center">
           <FolderPlus size={48} className="mx-auto text-gray-300 mb-3" />
-          <p className="text-gray-500 font-medium mb-1">Nenhum topico criado ainda</p>
+          <p className="text-gray-500 font-medium mb-1">Nenhum tópico criado ainda</p>
           <p className="text-gray-400 text-sm">
-            Crie topicos acima para organizar seus assuntos de estudo.
+            Crie tópicos acima para organizar seus assuntos de estudo.
           </p>
         </div>
       ) : (
@@ -571,7 +688,7 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
             const filtered = filterTopics(group.topics);
             const groupStats = getGroupStats(group);
             const isCollapsed = collapsedGroups.has(group.id);
-            const hasActiveFilter = statusFilter !== 'all' || priorityFilter !== 'all';
+            const hasActiveFilter = statusFilter !== 'all' || priorityFilter !== 'all' || tagFilter !== 'all';
             const hasFilteredContent = filtered.length > 0 || !hasActiveFilter;
 
             if (!hasFilteredContent && group.topics.length > 0) return null;
@@ -620,7 +737,7 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
                           )}
                           {groupStats.reviewsDue > 0 && (
                             <span className="text-xs px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 font-medium flex items-center gap-1">
-                              <Brain size={10} /> {groupStats.reviewsDue} revisao(oes)
+                              <Brain size={10} /> {groupStats.reviewsDue} revisão(oes)
                             </span>
                           )}
                         </div>
@@ -641,7 +758,7 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
                         <button
                           onClick={() => { setEditingGroupId(group.id); setEditGroupName(group.name); }}
                           className="p-1.5 text-gray-400 hover:text-blue-600 transition-colors rounded-lg hover:bg-blue-50"
-                          title="Renomear topico"
+                          title="Renomear tópico"
                         >
                           <Edit3 size={14} />
                         </button>
@@ -654,7 +771,7 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
                           <button
                             onClick={() => setDeleteConfirm(`group-${group.id}`)}
                             className="p-1.5 text-gray-400 hover:text-red-600 transition-colors rounded-lg hover:bg-red-50"
-                            title="Excluir topico"
+                            title="Excluir tópico"
                           >
                             <Trash2 size={14} />
                           </button>
@@ -722,7 +839,7 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
                     ) : filtered.length === 0 ? (
                       <div className="px-4 py-6 text-center text-sm text-gray-400">
                         <BookOpen size={24} className="mx-auto mb-2 text-gray-300" />
-                        Nenhum assunto adicionado neste topico ainda.
+                        Nenhum assunto adicionado neste tópico ainda.
                       </div>
                     ) : (
                       <div className="divide-y divide-gray-50">
@@ -740,6 +857,7 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
                             onToggleExpanded={toggleTopicExpanded}
                             onOpenStudyPopup={openStudyPopup}
                             onUpdateTopic={updateTopicInGroup}
+                            onUpdateQuestionProgress={updateTopicQuestionProgress}
                             onRemoveTopic={removeTopic}
                             onStartEdit={startTopicEdit}
                             onSaveEdit={saveTopicEdit}
@@ -748,6 +866,10 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
                             onSetDeleteConfirm={setDeleteConfirm}
                             onSetPriority={setPriority}
                             onTogglePriorityMenu={setPriorityMenuTopic}
+                            tagDraft={tagInputs[topic.id] || ''}
+                            onTagDraftChange={(value) => setTagInputs(prev => ({ ...prev, [topic.id]: value }))}
+                            onAddTag={addTagToTopic}
+                            onRemoveTag={removeTagFromTopic}
                           />
                         ))}
                       </div>
@@ -769,9 +891,12 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
           fsrsConfig={fsrsConfig}
           onClose={() => setStudyPopup(null)}
           onUpdateTopic={updateTopicInGroup}
+          onUpdateQuestionProgress={updateTopicQuestionProgress}
           onSetStudied={setTopicStudied}
           onRunReview={runTopicReview}
           onSetPriority={setPriority}
+          onAddTag={addTagToTopic}
+          onRemoveTag={removeTagFromTopic}
         />
       )}
 
@@ -781,8 +906,8 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
           className="rounded-xl p-4 text-white text-center text-sm font-medium"
           style={{ backgroundColor: subject.color }}
         >
-          {stats.studied} de {stats.total} conteudos estudados | {stats.questionsTotal} questoes feitas | {formatPercent(stats.rendimento)} de rendimento
-          {stats.reviewsDue > 0 && ` | \u{1F9E0} ${stats.reviewsDue} revisao(oes) pendente(s)`}
+          {stats.studied} de {stats.total} conteúdos estudados | {stats.questionsTotal} questões feitas | {formatPercent(stats.rendimento)} de rendimento
+          {stats.reviewsDue > 0 && ` | \u{1F9E0} ${stats.reviewsDue} revisão(oes) pendente(s)`}
         </div>
       )}
     </div>
@@ -802,6 +927,7 @@ interface TopicRowProps {
   onToggleExpanded: (topicId: string) => void;
   onOpenStudyPopup: (groupId: string, topicId: string) => void;
   onUpdateTopic: (groupId: string, topicId: string, changes: Partial<Topic>) => void;
+  onUpdateQuestionProgress: (groupId: string, topicId: string, nextTotal: number, nextCorrect: number) => void;
   onRemoveTopic: (groupId: string, topicId: string) => void;
   onStartEdit: (topic: Topic) => void;
   onSaveEdit: (groupId: string, topicId: string) => void;
@@ -810,14 +936,20 @@ interface TopicRowProps {
   onSetDeleteConfirm: (id: string | null) => void;
   onSetPriority: (groupId: string, topicId: string, priority: Priority | null) => void;
   onTogglePriorityMenu: (id: string | null) => void;
+  tagDraft: string;
+  onTagDraftChange: (value: string) => void;
+  onAddTag: (groupId: string, topicId: string, tag: string) => void;
+  onRemoveTag: (groupId: string, topicId: string, tag: string) => void;
 }
 
 function TopicRow({
   topic, groupId, subjectColor,
   editingTopicId, editTopicName, deleteConfirm, priorityMenuTopic,
   isExpanded, onToggleExpanded, onOpenStudyPopup, onUpdateTopic, onRemoveTopic,
+  onUpdateQuestionProgress,
   onStartEdit, onSaveEdit, onCancelEdit, onSetEditName,
   onSetDeleteConfirm, onSetPriority, onTogglePriorityMenu,
+  tagDraft, onTagDraftChange, onAddTag, onRemoveTag,
 }: TopicRowProps) {
   const isEditing = editingTopicId === topic.id;
   const detailsVisible = isExpanded || isEditing;
@@ -856,16 +988,16 @@ function TopicRow({
   }, [showPriorityMenu]);
 
   return (
-    <div className={`px-4 py-3 transition-all ${topic.studied ? 'bg-green-50/30 dark:bg-transparent dark:hover:bg-slate-800/40' : 'hover:bg-gray-50/50 dark:hover:bg-slate-800/40'} ${isDue ? 'border-l-2 border-l-purple-400' : ''}`}>
+    <div className={`px-4 py-3 transition-all hover:bg-gray-50/50 dark:hover:bg-slate-800/40 ${isDue ? 'border-l-2 border-l-purple-400' : ''}`}>
       <div className="flex items-start gap-3">
         <button
           onClick={() => onOpenStudyPopup(groupId, topic.id)}
                 className={`mt-0.5 w-6 h-6 rounded-md border-2 flex items-center justify-center shrink-0 transition-all ${
             topic.studied
-              ? 'bg-green-500 border-green-500 text-white'
+              ? 'bg-slate-600 border-slate-600 text-white'
               : 'border-gray-300 dark:border-slate-600 hover:border-gray-400 dark:hover:border-slate-400'
           }`}
-          title="Abrir painel rapido do assunto"
+          title="Abrir painel rápido do assunto"
         >
           {topic.studied && <Check size={14} />}
         </button>
@@ -897,6 +1029,17 @@ function TopicRow({
               <span className={`font-medium text-sm ${topic.studied ? 'line-through text-gray-400 dark:text-slate-500' : 'text-gray-800 dark:text-slate-100'}`}>
                 {topic.name}
               </span>
+              {(topic.tags ?? []).slice(0, 3).map(tag => (
+                <span
+                  key={`${topic.id}-${tag}-pill`}
+                  className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300"
+                >
+                  #{tag}
+                </span>
+              ))}
+              {(topic.tags ?? []).length > 3 && (
+                <span className="text-[10px] text-slate-400">+{(topic.tags ?? []).length - 3}</span>
+              )}
 
               <div className="relative" ref={priorityAnchorRef}>
                 <PriorityBadge
@@ -944,7 +1087,7 @@ function TopicRow({
               {nextReviewDate && (
                 <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium flex items-center gap-1 ${reviewStatus.className}`}>
                   <Calendar size={10} />
-                  Prox. revisao: {nextReviewDate}
+                  Prox. revisão: {nextReviewDate}
                 </span>
               )}
             </div>
@@ -954,17 +1097,14 @@ function TopicRow({
             <>
               <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mt-2">
                 <div className="flex items-center gap-1.5">
-                  <label className="text-xs text-gray-500">Questoes:</label>
+                  <label className="text-xs text-gray-500">Questões:</label>
                   <input
                     type="number"
                     min="0"
                     value={topic.questionsTotal || ''}
                     onChange={e => {
                       const nextTotal = parseNonNegativeInt(e.target.value);
-                      onUpdateTopic(groupId, topic.id, {
-                        questionsTotal: nextTotal,
-                        questionsCorrect: Math.min(topic.questionsCorrect, nextTotal),
-                      });
+                      onUpdateQuestionProgress(groupId, topic.id, nextTotal, Math.min(topic.questionsCorrect, nextTotal));
                     }}
                     className="w-14 border border-gray-200 rounded-md px-2 py-1 text-xs text-center focus:outline-none focus:ring-1 bg-white"
                     style={getRingColorStyle(subjectColor)}
@@ -978,9 +1118,12 @@ function TopicRow({
                     min="0"
                     max={topic.questionsTotal}
                     value={topic.questionsCorrect || ''}
-                    onChange={e => onUpdateTopic(groupId, topic.id, {
-                      questionsCorrect: Math.min(parseNonNegativeInt(e.target.value), topic.questionsTotal),
-                    })}
+                    onChange={e => onUpdateQuestionProgress(
+                      groupId,
+                      topic.id,
+                      topic.questionsTotal,
+                      Math.min(parseNonNegativeInt(e.target.value), topic.questionsTotal),
+                    )}
                     className="w-14 border border-gray-200 rounded-md px-2 py-1 text-xs text-center focus:outline-none focus:ring-1 bg-white"
                     style={getRingColorStyle(subjectColor)}
                     placeholder="0"
@@ -1017,6 +1160,42 @@ function TopicRow({
                 <DeadlineBadge deadline={topic.deadline} size="xs" />
               </div>
 
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                {(topic.tags ?? []).map(tag => (
+                  <button
+                    key={`${topic.id}-tag-${tag}`}
+                    onClick={() => onRemoveTag(groupId, topic.id, tag)}
+                    className="inline-flex items-center gap-1 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 px-2 py-0.5 text-[10px] hover:bg-slate-200 dark:hover:bg-slate-700"
+                    title="Remover tag"
+                  >
+                    #{tag} <X size={10} />
+                  </button>
+                ))}
+                <div className="flex items-center gap-1">
+                  <input
+                    type="text"
+                    value={tagDraft}
+                    onChange={event => onTagDraftChange(event.target.value)}
+                    onKeyDown={event => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault();
+                        onAddTag(groupId, topic.id, tagDraft);
+                      }
+                    }}
+                    placeholder="Nova tag"
+                    className="w-24 border border-gray-200 rounded-md px-2 py-1 text-[11px] focus:outline-none focus:ring-1 bg-white dark:bg-slate-950"
+                    style={getRingColorStyle(subjectColor)}
+                  />
+                  <button
+                    onClick={() => onAddTag(groupId, topic.id, tagDraft)}
+                    className="px-2 py-1 rounded-md text-[11px] text-white hover:opacity-90"
+                    style={{ backgroundColor: subjectColor }}
+                  >
+                    Tag
+                  </button>
+                </div>
+              </div>
+
               <div className="mt-2">
                 <input
                   type="text"
@@ -1030,7 +1209,7 @@ function TopicRow({
               <div className="mt-2 flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 text-[11px] text-gray-500">
                   <Brain size={12} className="text-purple-500" />
-                  <span>{topic.reviewHistory.length > 0 ? `Rev. ${topic.reviewHistory.length} - ${reviewStatus.text}` : 'Sem revisoes FSRS ainda'}</span>
+                  <span>{topic.reviewHistory.length > 0 ? `Rev. ${topic.reviewHistory.length} - ${reviewStatus.text}` : 'Sem revisões FSRS ainda'}</span>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
                   <button
@@ -1071,9 +1250,12 @@ interface TopicStudyModalProps {
   fsrsConfig: FSRSConfig;
   onClose: () => void;
   onUpdateTopic: (groupId: string, topicId: string, changes: Partial<Topic>) => void;
+  onUpdateQuestionProgress: (groupId: string, topicId: string, nextTotal: number, nextCorrect: number) => void;
   onSetStudied: (groupId: string, topicId: string, studied: boolean) => void;
   onRunReview: (groupId: string, topicId: string, rating: FSRSRating) => void;
   onSetPriority: (groupId: string, topicId: string, priority: Priority | null) => void;
+  onAddTag: (groupId: string, topicId: string, tag: string) => void;
+  onRemoveTag: (groupId: string, topicId: string, tag: string) => void;
 }
 
 function TopicStudyModal({
@@ -1083,11 +1265,15 @@ function TopicStudyModal({
   fsrsConfig,
   onClose,
   onUpdateTopic,
+  onUpdateQuestionProgress,
   onSetStudied,
   onRunReview,
   onSetPriority,
+  onAddTag,
+  onRemoveTag,
 }: TopicStudyModalProps) {
   const [autoMode, setAutoMode] = useState(true);
+  const [tagInput, setTagInput] = useState('');
   if (!topic) return null;
 
   const normalizedConfig = normalizeFSRSConfig(fsrsConfig);
@@ -1116,7 +1302,7 @@ function TopicStudyModal({
         <div className="px-5 py-4 border-b border-gray-100 flex items-start justify-between gap-3">
           <div>
             <h3 className="text-lg font-bold text-gray-800">{topic.name}</h3>
-            <p className="text-xs text-gray-500 mt-0.5">Painel rapido para estudo, desempenho e revisao FSRS.</p>
+            <p className="text-xs text-gray-500 mt-0.5">Painel rápido para estudo, desempenho e revisão FSRS.</p>
           </div>
           <button
             onClick={onClose}
@@ -1159,19 +1345,57 @@ function TopicStudyModal({
             </div>
           </div>
 
+          <div className="rounded-xl border border-gray-200 p-3">
+            <p className="text-xs uppercase tracking-wide text-gray-400 mb-2">Tags</p>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {(topic.tags ?? []).map(tag => (
+                <button
+                  key={`modal-tag-${topic.id}-${tag}`}
+                  onClick={() => onRemoveTag(groupId, topic.id, tag)}
+                  className="inline-flex items-center gap-1 rounded-full bg-slate-100 text-slate-600 px-2 py-0.5 text-[11px] hover:bg-slate-200"
+                  title="Remover tag"
+                >
+                  #{tag} <X size={10} />
+                </button>
+              ))}
+              <input
+                type="text"
+                value={tagInput}
+                onChange={event => setTagInput(event.target.value)}
+                onKeyDown={event => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    onAddTag(groupId, topic.id, tagInput);
+                    setTagInput('');
+                  }
+                }}
+                className="w-36 border border-gray-300 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2"
+                style={getRingColorStyle(subjectColor)}
+                placeholder="Nova tag"
+              />
+              <button
+                onClick={() => {
+                  onAddTag(groupId, topic.id, tagInput);
+                  setTagInput('');
+                }}
+                className="px-2.5 py-1.5 rounded-lg text-xs text-white hover:opacity-90"
+                style={{ backgroundColor: subjectColor }}
+              >
+                Adicionar
+              </button>
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
             <div>
-              <label className="text-xs uppercase tracking-wide text-gray-400">Questoes</label>
+              <label className="text-xs uppercase tracking-wide text-gray-400">Questões</label>
               <input
                 type="number"
                 min="0"
                 value={topic.questionsTotal || ''}
                 onChange={event => {
                   const nextTotal = parseNonNegativeInt(event.target.value);
-                  onUpdateTopic(groupId, topic.id, {
-                    questionsTotal: nextTotal,
-                    questionsCorrect: Math.min(topic.questionsCorrect, nextTotal),
-                  });
+                  onUpdateQuestionProgress(groupId, topic.id, nextTotal, Math.min(topic.questionsCorrect, nextTotal));
                 }}
                 className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2"
                 style={getRingColorStyle(subjectColor)}
@@ -1184,9 +1408,12 @@ function TopicStudyModal({
                 min="0"
                 max={topic.questionsTotal}
                 value={topic.questionsCorrect || ''}
-                onChange={event => onUpdateTopic(groupId, topic.id, {
-                  questionsCorrect: Math.min(parseNonNegativeInt(event.target.value), topic.questionsTotal),
-                })}
+                onChange={event => onUpdateQuestionProgress(
+                  groupId,
+                  topic.id,
+                  topic.questionsTotal,
+                  Math.min(parseNonNegativeInt(event.target.value), topic.questionsTotal),
+                )}
                 className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2"
                 style={getRingColorStyle(subjectColor)}
               />
@@ -1229,7 +1456,7 @@ function TopicStudyModal({
               </span>
             )}
             <span className={`px-2 py-0.5 rounded-full font-medium ${reviewStatus.className}`}>
-              {topic.fsrsNextReview ? `Prox. revisao: ${new Date(topic.fsrsNextReview + 'T00:00:00').toLocaleDateString('pt-BR')}` : 'Sem revisao agendada'}
+              {topic.fsrsNextReview ? `Prox. revisão: ${new Date(topic.fsrsNextReview + 'T00:00:00').toLocaleDateString('pt-BR')}` : 'Sem revisão agendada'}
             </span>
             <span className="px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 font-medium">
               {FSRS_VERSION_LABEL[normalizedConfig.version]}
@@ -1239,7 +1466,7 @@ function TopicStudyModal({
           <div className="rounded-xl border border-purple-200 bg-purple-50 p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
-                <h4 className="text-sm font-bold text-purple-800">Sistema de revisao FSRS</h4>
+                <h4 className="text-sm font-bold text-purple-800">Sistema de revisão FSRS</h4>
                 <p className="text-xs text-purple-600">Use Auto para sugerir dificuldade com base no seu desempenho.</p>
               </div>
               <button
@@ -1258,7 +1485,7 @@ function TopicStudyModal({
                 {suggestedOption ? (
                   <>
                     <p className="text-xs text-purple-700 bg-purple-100 rounded-lg px-3 py-2">
-                      Sugestao automatica: {suggestedOption.emoji} {suggestedOption.label}
+                      Sugestão automática: {suggestedOption.emoji} {suggestedOption.label}
                       {accuracy !== null && ` (${formatPercent(accuracy)} de acerto)`}
                       {suggestedDeadline && ` | Prazo sugerido: ${new Date(suggestedDeadline + 'T00:00:00').toLocaleDateString('pt-BR')}`}
                     </p>
@@ -1272,13 +1499,13 @@ function TopicStudyModal({
                   </>
                 ) : (
                   <p className="text-xs text-purple-700 bg-purple-100 rounded-lg px-3 py-2">
-                    Para usar Auto, informe quantidade de questoes e acertos.
+                    Para usar Auto, informe quantidade de questões e acertos.
                   </p>
                 )}
               </div>
             ) : (
               <div className="mt-3">
-                <p className="text-xs text-purple-700 mb-2">Modo manual: escolha a avaliacao da revisao.</p>
+                <p className="text-xs text-purple-700 mb-2">Modo manual: escolha a avaliação da revisão.</p>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                   {RATING_OPTIONS.map(option => {
                     const nextDate = previewNextReviewDate(option.value);

@@ -22,13 +22,21 @@ export interface ReviewEntry {
   usedCustomWeights?: boolean;
 }
 
+export interface QuestionLogEntry {
+  date: string; // YYYY-MM-DD
+  questionsMade: number;
+  questionsCorrect: number;
+}
+
 export interface Topic {
   id: string;
   name: string;
   studied: boolean;
   questionsTotal: number;
   questionsCorrect: number;
+  questionLogs: QuestionLogEntry[];
   notes: string;
+  tags: string[];
   dateStudied: string | null;
   priority: Priority | null;
   deadline: string | null; // YYYY-MM-DD format
@@ -55,10 +63,15 @@ export interface Subject {
   topicGroups: TopicGroup[];
 }
 
+export interface ScheduleCellData {
+  text: string;
+  subjectId?: string;
+}
+
 export interface ScheduleRow {
   id: string;
   timeLabel: string;
-  cells: string[];
+  cells: ScheduleCellData[];
 }
 
 export interface WeeklySchedule {
@@ -86,12 +99,19 @@ export interface EssayMonitorSettings {
   timerDurationMinutes: 60 | 90;
 }
 
+export interface StudyGoals {
+  dailyQuestionsTarget: number;
+  weeklyReviewTarget: number;
+  weeklyEssayTarget: number;
+}
+
 export interface StudyData {
   subjects: Subject[];
   settings: {
     fsrs: FSRSConfig;
     schedule: WeeklySchedule;
     essayMonitor: EssayMonitorSettings;
+    goals: StudyGoals;
   };
   lastUpdated: string;
 }

@@ -1,4 +1,4 @@
-﻿// ========================================
+// ========================================
 // FSRS v5 Algorithm - Ported from Obsidian Script
 // ========================================
 
@@ -137,9 +137,9 @@ export interface ReviewEntry {
 
 export const RATING_OPTIONS = [
   { value: 1 as FSRSRating, label: 'Esqueci', emoji: '\u{1F534}', color: 'bg-red-500', hoverColor: 'hover:bg-red-600', lightBg: 'bg-red-50', textColor: 'text-red-700', borderColor: 'border-red-200' },
-  { value: 2 as FSRSRating, label: 'Dificil', emoji: '\u{1F7E0}', color: 'bg-orange-500', hoverColor: 'hover:bg-orange-600', lightBg: 'bg-orange-50', textColor: 'text-orange-700', borderColor: 'border-orange-200' },
+  { value: 2 as FSRSRating, label: 'Difícil', emoji: '\u{1F7E0}', color: 'bg-orange-500', hoverColor: 'hover:bg-orange-600', lightBg: 'bg-orange-50', textColor: 'text-orange-700', borderColor: 'border-orange-200' },
   { value: 3 as FSRSRating, label: 'Bom', emoji: '\u{1F7E1}', color: 'bg-yellow-500', hoverColor: 'hover:bg-yellow-600', lightBg: 'bg-yellow-50', textColor: 'text-yellow-700', borderColor: 'border-yellow-200' },
-  { value: 4 as FSRSRating, label: 'Facil', emoji: '\u{1F7E2}', color: 'bg-green-500', hoverColor: 'hover:bg-green-600', lightBg: 'bg-green-50', textColor: 'text-green-700', borderColor: 'border-green-200' },
+  { value: 4 as FSRSRating, label: 'Fácil', emoji: '\u{1F7E2}', color: 'bg-green-500', hoverColor: 'hover:bg-green-600', lightBg: 'bg-green-50', textColor: 'text-green-700', borderColor: 'border-green-200' },
 ];
 
 /**
@@ -328,13 +328,13 @@ export function getReviewStatus(nextReview: string | null): {
   className: string;
   urgency: 'overdue' | 'today' | 'tomorrow' | 'soon' | 'normal' | 'none';
 } {
-  if (!nextReview) return { text: 'Sem revisao', className: 'text-gray-400 bg-gray-100', urgency: 'none' };
+  if (!nextReview) return { text: 'Sem revisão', className: 'text-gray-400 bg-gray-100', urgency: 'none' };
 
   const days = daysUntilReview(nextReview)!;
 
   if (days < 0) return { text: `Atrasada (${Math.abs(days)}d)`, className: 'text-red-700 bg-red-100', urgency: 'overdue' };
   if (days === 0) return { text: 'Hoje!', className: 'text-orange-700 bg-orange-100', urgency: 'today' };
-  if (days === 1) return { text: 'Amanha', className: 'text-amber-700 bg-amber-100', urgency: 'tomorrow' };
+  if (days === 1) return { text: 'Amanhã', className: 'text-amber-700 bg-amber-100', urgency: 'tomorrow' };
   if (days <= 3) return { text: `Em ${days} dias`, className: 'text-yellow-700 bg-yellow-100', urgency: 'soon' };
   if (days <= 7) return { text: `Em ${days} dias`, className: 'text-blue-700 bg-blue-100', urgency: 'normal' };
   return { text: `Em ${days} dias`, className: 'text-gray-600 bg-gray-100', urgency: 'normal' };
@@ -344,11 +344,11 @@ export function getReviewStatus(nextReview: string | null): {
  * Calculate difficulty label for display.
  */
 export function getDifficultyLabel(difficulty: number): { text: string; color: string } {
-  if (difficulty <= 2) return { text: 'Muito Facil', color: 'text-green-600' };
-  if (difficulty <= 4) return { text: 'Facil', color: 'text-green-500' };
+  if (difficulty <= 2) return { text: 'Muito Fácil', color: 'text-green-600' };
+  if (difficulty <= 4) return { text: 'Fácil', color: 'text-green-500' };
   if (difficulty <= 6) return { text: 'Medio', color: 'text-yellow-600' };
-  if (difficulty <= 8) return { text: 'Dificil', color: 'text-orange-600' };
-  return { text: 'Muito Dificil', color: 'text-red-600' };
+  if (difficulty <= 8) return { text: 'Difícil', color: 'text-orange-600' };
+  return { text: 'Muito Difícil', color: 'text-red-600' };
 }
 
 /**
@@ -357,4 +357,3 @@ export function getDifficultyLabel(difficulty: number): { text: string; color: s
 export function generateReviewId(): string {
   return 'rev_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 6);
 }
-

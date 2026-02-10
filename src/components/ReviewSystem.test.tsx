@@ -29,7 +29,9 @@ function makeSubjectsWithUpcoming(count: number): Subject[] {
             studied: true,
             questionsTotal: 0,
             questionsCorrect: 0,
+            questionLogs: [],
             notes: "",
+            tags: [],
             dateStudied: null,
             priority: null,
             deadline: null,
@@ -66,8 +68,8 @@ describe("ReviewSystem visible count", () => {
     expect(screen.getByText("Topic 10")).toBeInTheDocument();
     expect(screen.queryByText("Topic 11")).not.toBeInTheDocument();
 
-    const selects = screen.getAllByRole("combobox");
-    fireEvent.change(selects[0], { target: { value: "20" } });
+    const upcomingSelect = screen.getByLabelText("Quantidade de próximas revisões");
+    fireEvent.change(upcomingSelect, { target: { value: "20" } });
 
     expect(screen.getByText("Topic 20")).toBeInTheDocument();
   });
