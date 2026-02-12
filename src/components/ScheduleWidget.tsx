@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react';
-import { Plus, Trash2, Clock3, X, Check } from 'lucide-react';
+﻿import { useEffect, useMemo, useState } from 'react';
+import { Plus, Trash2 } from 'lucide-react';
 import type { ScheduleCellData, Subject, WeeklySchedule } from '../types';
 import { generateId } from '../store';
 
@@ -9,14 +9,58 @@ interface ScheduleWidgetProps {
   onUpdateSchedule: (schedule: WeeklySchedule) => void;
 }
 
-interface EditingCellRef {
-  rowId: string;
-  colIndex: number;
+interface VisibleColumn {
+  label: string;
+  index: number;
+}
+
+const WEEKDAYS = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'];
+
+function normalizeDayLabel(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLocaleLowerCase('pt-BR');
+}
+
+function normalizeScheduleColumns(schedule: WeeklySchedule): WeeklySchedule | null {
+  const normalizedColumns = schedule.columns.map(column => normalizeDayLabel(column));
+
+  const hasExactColumns =
+    schedule.columns.length === WEEKDAYS.length &&
+    WEEKDAYS.every((day, index) => normalizedColumns[index] === normalizeDayLabel(day));
+
+  const hasValidRows = schedule.rows.every(row => row.cells.length === WEEKDAYS.length);
+
+  if (hasExactColumns && hasValidRows) return null;
+
+  const normalizedRows = schedule.rows.map(row => {
+    const nextCells = WEEKDAYS.map(day => {
+      const oldIndex = schedule.columns.findIndex(column => normalizeDayLabel(column) === normalizeDayLabel(day));
+      if (oldIndex >= 0 && oldIndex < row.cells.length) {
+        const existingCell = row.cells[oldIndex] ?? { text: '' };
+        return {
+          text: existingCell.text || '',
+          subjectId: existingCell.subjectId || undefined,
+        };
+      }
+      return { text: '' };
+    });
+
+    return {
+      ...row,
+      cells: nextCells,
+    };
+  });
+
+  return {
+    columns: [...WEEKDAYS],
+    rows: normalizedRows,
+  };
 }
 
 export function ScheduleWidget({ subjects, schedule, onUpdateSchedule }: ScheduleWidgetProps) {
-  const [editingCell, setEditingCell] = useState<EditingCellRef | null>(null);
-  const [editForm, setEditForm] = useState<{ text: string; subjectId: string }>({ text: '', subjectId: '' });
   const [isAddingTime, setIsAddingTime] = useState(false);
   const [newTime, setNewTime] = useState('');
 
@@ -25,45 +69,34 @@ export function ScheduleWidget({ subjects, schedule, onUpdateSchedule }: Schedul
     [subjects],
   );
 
-  function getCellBg(cell: ScheduleCellData) {
-    if (!cell.subjectId) return '#f8fafc';
-    const subject = subjectById.get(cell.subjectId);
-    if (!subject) return '#f8fafc';
-    return subject.colorLight || '#f1f5f9';
+  useEffect(() => {
+    const normalized = normalizeScheduleColumns(schedule);
+    if (normalized) onUpdateSchedule(normalized);
+  }, [schedule, onUpdateSchedule]);
+
+  const visibleColumns = useMemo<VisibleColumn[]>(() => {
+    return WEEKDAYS
+      .map(label => {
+        const foundIndex = schedule.columns.findIndex(column => normalizeDayLabel(column) === normalizeDayLabel(label));
+        if (foundIndex < 0) return null;
+        return { label, index: foundIndex };
+      })
+      .filter((column): column is VisibleColumn => column !== null);
+  }, [schedule.columns]);
+
+  function getCell(rowId: string, colIndex: number): ScheduleCellData {
+    const row = schedule.rows.find(item => item.id === rowId);
+    if (!row) return { text: '' };
+    return row.cells[colIndex] ?? { text: '' };
   }
 
-  function getCellTextClass(cell: ScheduleCellData) {
-    if (!cell.subjectId) return 'text-slate-500 dark:text-slate-400';
-    const subject = subjectById.get(cell.subjectId);
-    if (!subject) return 'text-slate-500 dark:text-slate-400';
-    return 'font-medium';
-  }
-
-  function getCellTextColor(cell: ScheduleCellData) {
-    if (!cell.subjectId) return undefined;
-    return subjectById.get(cell.subjectId)?.color;
-  }
-
-  function handleCellClick(rowId: string, colIndex: number, cell: ScheduleCellData) {
-    setEditingCell({ rowId, colIndex });
-    setEditForm({
-      text: cell.text,
-      subjectId: cell.subjectId || '',
-    });
-  }
-
-  function closeEditModal() {
-    setEditingCell(null);
-  }
-
-  function saveCell() {
-    if (!editingCell) return;
+  function updateCellSubject(rowId: string, colIndex: number, subjectId: string) {
     const nextRows = schedule.rows.map(row => {
-      if (row.id !== editingCell.rowId) return row;
+      if (row.id !== rowId) return row;
       const nextCells = [...row.cells];
-      nextCells[editingCell.colIndex] = {
-        text: editForm.text,
-        subjectId: editForm.subjectId || undefined,
+      nextCells[colIndex] = {
+        text: '',
+        subjectId: subjectId || undefined,
       };
       return { ...row, cells: nextCells };
     });
@@ -72,7 +105,6 @@ export function ScheduleWidget({ subjects, schedule, onUpdateSchedule }: Schedul
       ...schedule,
       rows: nextRows,
     });
-    closeEditModal();
   }
 
   function addTimeRow() {
@@ -106,8 +138,8 @@ export function ScheduleWidget({ subjects, schedule, onUpdateSchedule }: Schedul
     <div className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm p-4 md:p-5">
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div>
-          <h2 className="text-sm md:text-base font-semibold text-slate-800 dark:text-slate-100">Cronograma semanal</h2>
-          <p className="text-xs text-slate-500 dark:text-slate-400">Clique na célula para editar matéria e conteúdo.</p>
+          <h2 className="text-sm md:text-base font-semibold text-slate-800 dark:text-slate-100">Cronograma semanal (segunda a domingo)</h2>
+          <p className="text-xs text-slate-500 dark:text-slate-400">Selecione a disciplina em cada célula usando a mesma lista da barra lateral.</p>
         </div>
         <button
           onClick={() => setIsAddingTime(true)}
@@ -118,20 +150,20 @@ export function ScheduleWidget({ subjects, schedule, onUpdateSchedule }: Schedul
       </div>
 
       <div className="overflow-x-auto">
-        <table className="min-w-[820px] w-full border-separate border-spacing-0">
+        <table className="min-w-[980px] w-full border-separate border-spacing-0">
           <thead>
             <tr>
-              <th className="text-left text-[11px] uppercase tracking-wide text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-800/60 px-3 py-2 rounded-tl-lg border border-slate-200 dark:border-slate-700 w-[130px]">
-                Horário
+              <th className="text-left text-[11px] uppercase tracking-wide text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-800/60 px-3 py-2 rounded-tl-lg border border-slate-200 dark:border-slate-700 w-[150px]">
+                Horários
               </th>
-              {schedule.columns.map((column, idx) => (
+              {visibleColumns.map((column, idx) => (
                 <th
-                  key={`schedule-col-${column}-${idx}`}
+                  key={`schedule-col-${column.label}-${idx}`}
                   className={`text-center text-[11px] uppercase tracking-wide text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-800/60 px-2 py-2 border-t border-b border-slate-200 dark:border-slate-700 ${
-                    idx === schedule.columns.length - 1 ? 'border-r rounded-tr-lg' : 'border-r'
+                    idx === visibleColumns.length - 1 ? 'border-r rounded-tr-lg' : 'border-r'
                   }`}
                 >
-                  {column}
+                  {column.label}
                 </th>
               ))}
             </tr>
@@ -141,9 +173,8 @@ export function ScheduleWidget({ subjects, schedule, onUpdateSchedule }: Schedul
               <tr key={row.id} className="group">
                 <td className="px-3 py-2 border-b border-l border-r border-slate-200 dark:border-slate-700 align-top">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="inline-flex items-center gap-1.5 text-xs text-slate-700 dark:text-slate-200 font-medium">
-                      <Clock3 size={13} className="text-slate-400" />
-                      {row.timeLabel}
+                    <span className="text-xs text-slate-700 dark:text-slate-200 font-medium whitespace-nowrap">
+                      {row.timeLabel || '--:--'}
                     </span>
                     <button
                       onClick={() => deleteRow(row.id)}
@@ -155,85 +186,35 @@ export function ScheduleWidget({ subjects, schedule, onUpdateSchedule }: Schedul
                     </button>
                   </div>
                 </td>
-                {row.cells.map((cell, colIndex) => (
-                  <td
-                    key={`${row.id}-${colIndex}`}
-                    className="p-1.5 border-b border-r border-slate-200 dark:border-slate-700 align-top"
-                  >
-                    <button
-                      onClick={() => handleCellClick(row.id, colIndex, cell)}
-                      className={`w-full h-14 rounded-lg border border-transparent hover:border-slate-300 dark:hover:border-slate-600 transition-colors px-2 text-xs text-center leading-tight ${getCellTextClass(cell)}`}
-                      style={{ backgroundColor: getCellBg(cell), color: getCellTextColor(cell) }}
+                {visibleColumns.map(column => {
+                  const cell = getCell(row.id, column.index);
+                  const subject = cell.subjectId ? subjectById.get(cell.subjectId) : undefined;
+                  return (
+                    <td
+                      key={`${row.id}-${column.index}`}
+                      className="p-1.5 border-b border-r border-slate-200 dark:border-slate-700 align-top"
+                      style={subject?.colorLight ? { backgroundColor: subject.colorLight } : undefined}
                     >
-                      {cell.text.trim() || <Plus size={12} className="mx-auto opacity-35" />}
-                    </button>
-                  </td>
-                ))}
+                      <select
+                        value={cell.subjectId || ''}
+                        onChange={event => updateCellSubject(row.id, column.index, event.target.value)}
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-2 py-1.5 text-xs text-slate-700 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-cyan-400"
+                      >
+                        <option value="">Sem disciplina</option>
+                        {subjects.map(subjectOption => (
+                          <option key={`schedule-select-${row.id}-${column.index}-${subjectOption.id}`} value={subjectOption.id}>
+                            {subjectOption.emoji} {subjectOption.name}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                  );
+                })}
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-
-      {editingCell && (
-        <div className="fixed inset-0 z-[80] bg-black/45 flex items-center justify-center p-4">
-          <div className="w-full max-w-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-2xl">
-            <div className="px-4 py-3 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Editar célula</h3>
-              <button
-                onClick={closeEditModal}
-                className="p-1 rounded-md text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
-              >
-                <X size={16} />
-              </button>
-            </div>
-
-            <div className="p-4 space-y-3">
-              <div>
-                <label className="block text-xs font-medium text-slate-600 dark:text-slate-300 mb-1">Matéria</label>
-                <select
-                  value={editForm.subjectId}
-                  onChange={event => setEditForm(prev => ({ ...prev, subjectId: event.target.value }))}
-                  className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-2.5 py-2 text-sm text-slate-700 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-cyan-400"
-                >
-                  <option value="">Sem matéria</option>
-                  {subjects.map(subject => (
-                    <option key={`schedule-subject-option-${subject.id}`} value={subject.id}>
-                      {subject.emoji} {subject.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-600 dark:text-slate-300 mb-1">Conteúdo</label>
-                <input
-                  value={editForm.text}
-                  onChange={event => setEditForm(prev => ({ ...prev, text: event.target.value }))}
-                  placeholder="Ex: Revisão FSRS"
-                  className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-2.5 py-2 text-sm text-slate-700 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-400"
-                  autoFocus
-                />
-              </div>
-
-              <div className="pt-1 flex items-center justify-end gap-2">
-                <button
-                  onClick={closeEditModal}
-                  className="px-3 py-2 rounded-lg text-sm bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
-                >
-                  Cancelar
-                </button>
-                <button
-                  onClick={saveCell}
-                  className="px-3 py-2 rounded-lg text-sm bg-cyan-600 text-white hover:bg-cyan-700 inline-flex items-center gap-1.5"
-                >
-                  <Check size={14} /> Salvar
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {isAddingTime && (
         <div className="fixed inset-0 z-[80] bg-black/45 flex items-center justify-center p-4">
@@ -265,4 +246,3 @@ export function ScheduleWidget({ subjects, schedule, onUpdateSchedule }: Schedul
     </div>
   );
 }
-

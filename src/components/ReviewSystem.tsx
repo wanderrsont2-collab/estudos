@@ -1,9 +1,10 @@
-﻿import { useEffect, useMemo, useState } from 'react';
+﻿import { memo, useEffect, useMemo, useState } from 'react';
 import { Subject, Topic, ReviewEntry } from '../types';
 import {
   fsrsReview, RATING_OPTIONS, suggestRatingFromPerformance,
   getReviewStatus, getDifficultyLabel, generateReviewId, daysUntilReview,
   FSRSRating, calculateRetrievabilityWithConfig, type FSRSConfig,
+  type FSRSState,
   type FSRSVersion, FSRS_VERSION_LABEL, getExpectedWeightCount,
   getDefaultWeights, normalizeFSRSConfig,
 } from '../fsrs';
@@ -13,7 +14,7 @@ import {
 import {
   Brain, TrendingUp, ChevronDown, ChevronRight,
   History, Zap, BarChart3, ArrowRight, RotateCcw,
-  Calendar, Star, AlertTriangle, Filter, Search,
+  Calendar, Star, AlertTriangle, Filter, Search, X,
 } from 'lucide-react';
 
 interface ReviewSystemProps {
@@ -26,6 +27,15 @@ interface ReviewSystemProps {
 
 const VISIBLE_COUNT_OPTIONS = [10, 20, 30] as const;
 type VisibleCount = (typeof VISIBLE_COUNT_OPTIONS)[number];
+type PriorityFilter = 'all' | 'alta' | 'media' | 'baixa' | 'none';
+type DueUrgencyFilter = 'all' | 'overdue' | 'today';
+
+interface TopicFilterConfig {
+  subjectFilter: string;
+  priorityFilter: PriorityFilter;
+  tagFilter: string;
+  searchTokens: string[];
+}
 
 function formatPercent(v: number) {
   return `${Math.round(v * 100)}%`;
@@ -37,6 +47,12 @@ function formatDate(date: string) {
     month: '2-digit',
     year: 'numeric',
   });
+}
+
+function parseNonNegativeInt(value: string | number): number {
+  const parsed = typeof value === 'number' ? value : Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.max(0, Math.floor(parsed));
 }
 
 function toDateOnlyString(date: Date): string {
@@ -59,6 +75,81 @@ function formatWeightsForInput(weights: readonly number[]): string {
   return weights.map(w => Number(w).toString()).join(', ');
 }
 
+function readVisibleCount(key: string): VisibleCount {
+  if (typeof window === 'undefined') return VISIBLE_COUNT_OPTIONS[0];
+  const stored = Number(window.localStorage.getItem(key));
+  return VISIBLE_COUNT_OPTIONS.includes(stored as VisibleCount)
+    ? (stored as VisibleCount)
+    : VISIBLE_COUNT_OPTIONS[0];
+}
+
+function topicMatchesFilters(
+  topic: Topic,
+  context: {
+    subjectId: string;
+    subjectName: string;
+    groupName: string;
+  },
+  filters: TopicFilterConfig,
+) {
+  if (filters.subjectFilter !== 'all' && context.subjectId !== filters.subjectFilter) return false;
+  if (filters.priorityFilter !== 'all') {
+    if (filters.priorityFilter === 'none' && topic.priority !== null) return false;
+    if (filters.priorityFilter !== 'none' && topic.priority !== filters.priorityFilter) return false;
+  }
+  if (filters.tagFilter !== 'all' && !(topic.tags ?? []).includes(filters.tagFilter)) return false;
+  if (filters.searchTokens.length === 0) return true;
+
+  const haystack = [
+    topic.name,
+    topic.notes,
+    topic.priority ?? '',
+    context.subjectName,
+    context.groupName,
+    (topic.tags ?? []).join(' '),
+    topic.fsrsNextReview ?? '',
+  ]
+    .join(' ')
+    .toLocaleLowerCase('pt-BR');
+
+  return filters.searchTokens.every(token => haystack.includes(token));
+}
+
+function createReviewEntry(params: {
+  topic: Topic;
+  rating: FSRSRating;
+  currentState: FSRSState;
+  newState: FSRSState;
+  intervalDays: number;
+  retrievability: number | null;
+  fsrsConfig: FSRSConfig;
+}): ReviewEntry {
+  const ratingOption = RATING_OPTIONS.find(r => r.value === params.rating)!;
+  const performanceScore = params.topic.questionsTotal > 0
+    ? params.topic.questionsCorrect / params.topic.questionsTotal
+    : null;
+
+  return {
+    id: generateReviewId(),
+    reviewNumber: params.topic.reviewHistory.length + 1,
+    date: toDateOnlyString(new Date()),
+    rating: params.rating,
+    ratingLabel: ratingOption.label,
+    difficultyBefore: params.currentState.difficulty,
+    difficultyAfter: params.newState.difficulty,
+    stabilityBefore: params.currentState.stability,
+    stabilityAfter: params.newState.stability,
+    intervalDays: params.intervalDays,
+    retrievability: params.retrievability,
+    performanceScore,
+    questionsTotal: params.topic.questionsTotal,
+    questionsCorrect: params.topic.questionsCorrect,
+    algorithmVersion: params.fsrsConfig.version,
+    requestedRetention: params.fsrsConfig.requestedRetention,
+    usedCustomWeights: params.fsrsConfig.customWeights !== null,
+  };
+}
+
 export function ReviewSystem({
   subjects,
   fsrsConfig,
@@ -67,29 +158,35 @@ export function ReviewSystem({
   onNavigateToSubject,
 }: ReviewSystemProps) {
   const [activeReviewTopicId, setActiveReviewTopicId] = useState<string | null>(null);
+  const [reviewPopup, setReviewPopup] = useState<{
+    subjectId: string;
+    groupId: string;
+    topicId: string;
+    questionsMade: number;
+    questionsCorrect: number;
+  } | null>(null);
+  const [reviewPopupError, setReviewPopupError] = useState<string | null>(null);
   const [expandedHistory, setExpandedHistory] = useState<Set<string>>(new Set());
   const [weightsDraft, setWeightsDraft] = useState(() => {
     const normalized = normalizeFSRSConfig(fsrsConfig);
     return formatWeightsForInput(normalized.customWeights ?? getDefaultWeights(normalized.version));
   });
   const [weightsError, setWeightsError] = useState<string | null>(null);
-  const [upcomingVisibleCount, setUpcomingVisibleCount] = useState<VisibleCount>(() => {
-    const stored = Number(window.localStorage.getItem('reviews_upcoming_visible_count'));
-    return VISIBLE_COUNT_OPTIONS.includes(stored as VisibleCount) ? (stored as VisibleCount) : 10;
-  });
-  const [activeTopicsVisibleCount, setActiveTopicsVisibleCount] = useState<VisibleCount>(() => {
-    const stored = Number(window.localStorage.getItem('reviews_active_visible_count'));
-    return VISIBLE_COUNT_OPTIONS.includes(stored as VisibleCount) ? (stored as VisibleCount) : 10;
-  });
+  const [upcomingVisibleCount, setUpcomingVisibleCount] = useState<VisibleCount>(() => (
+    readVisibleCount('reviews_upcoming_visible_count')
+  ));
+  const [activeTopicsVisibleCount, setActiveTopicsVisibleCount] = useState<VisibleCount>(() => (
+    readVisibleCount('reviews_active_visible_count')
+  ));
   const [searchFilter, setSearchFilter] = useState('');
   const [subjectFilter, setSubjectFilter] = useState<string>('all');
-  const [priorityFilter, setPriorityFilter] = useState<'all' | 'alta' | 'media' | 'baixa' | 'none'>('all');
+  const [priorityFilter, setPriorityFilter] = useState<PriorityFilter>('all');
   const [tagFilter, setTagFilter] = useState<string>('all');
-  const [dueUrgencyFilter, setDueUrgencyFilter] = useState<'all' | 'overdue' | 'today'>('all');
+  const [dueUrgencyFilter, setDueUrgencyFilter] = useState<DueUrgencyFilter>('all');
   const [upcomingRangeDays, setUpcomingRangeDays] = useState<7 | 30 | 3650>(30);
-
-  const reviewsDue = getReviewsDue(subjects);
-  const upcomingReviewsAll = getUpcomingReviews(subjects, 500);
+  const currentFsrsConfig = useMemo(() => normalizeFSRSConfig(fsrsConfig), [fsrsConfig]);
+  const reviewsDue = useMemo(() => getReviewsDue(subjects), [subjects]);
+  const upcomingReviewsAll = useMemo(() => getUpcomingReviews(subjects, 500), [subjects]);
 
   const availableTags = useMemo(() => {
     const unique = new Set<string>();
@@ -101,8 +198,17 @@ export function ReviewSystem({
     return Array.from(unique).sort((a, b) => a.localeCompare(b, 'pt-BR'));
   }, [subjects]);
 
-  const searchTokens = searchFilter.trim().toLocaleLowerCase('pt-BR').split(/\s+/).filter(Boolean);
+  const searchTokens = useMemo(
+    () => searchFilter.trim().toLocaleLowerCase('pt-BR').split(/\s+/).filter(Boolean),
+    [searchFilter],
+  );
   const hasSearchFilter = searchTokens.length > 0;
+  const baseFilters = useMemo<TopicFilterConfig>(() => ({
+    subjectFilter,
+    priorityFilter,
+    tagFilter,
+    searchTokens,
+  }), [subjectFilter, priorityFilter, tagFilter, searchTokens]);
   const hasAdvancedFilters = hasSearchFilter
     || subjectFilter !== 'all'
     || priorityFilter !== 'all'
@@ -110,49 +216,28 @@ export function ReviewSystem({
     || dueUrgencyFilter !== 'all'
     || upcomingRangeDays !== 30;
 
-  function topicPassesBaseFilter(
-    topic: Topic,
-    subjectId: string,
-    subjectName: string,
-    groupName: string,
-  ) {
-    if (subjectFilter !== 'all' && subjectId !== subjectFilter) return false;
-    if (priorityFilter !== 'all') {
-      if (priorityFilter === 'none' && topic.priority !== null) return false;
-      if (priorityFilter !== 'none' && topic.priority !== priorityFilter) return false;
-    }
-    if (tagFilter !== 'all' && !(topic.tags ?? []).some(tag => tag === tagFilter)) return false;
-    if (!hasSearchFilter) return true;
+  const filteredDueReviews = useMemo(() => (
+    reviewsDue.filter(item => {
+      if (!topicMatchesFilters(item.topic, item, baseFilters)) return false;
+      if (dueUrgencyFilter === 'all') return true;
+      const status = getReviewStatus(item.topic.fsrsNextReview);
+      if (dueUrgencyFilter === 'today') return status.urgency === 'today';
+      return status.urgency === 'overdue';
+    })
+  ), [reviewsDue, baseFilters, dueUrgencyFilter]);
 
-    const haystack = [
-      topic.name,
-      topic.notes,
-      topic.priority ?? '',
-      subjectName,
-      groupName,
-      (topic.tags ?? []).join(' '),
-      topic.fsrsNextReview ?? '',
-    ]
-      .join(' ')
-      .toLocaleLowerCase('pt-BR');
-    return searchTokens.every(token => haystack.includes(token));
-  }
-
-  const filteredDueReviews = reviewsDue.filter(item => {
-    if (!topicPassesBaseFilter(item.topic, item.subjectId, item.subjectName, item.groupName)) return false;
-    if (dueUrgencyFilter === 'all') return true;
-    const status = getReviewStatus(item.topic.fsrsNextReview);
-    if (dueUrgencyFilter === 'today') return status.urgency === 'today';
-    return status.urgency === 'overdue';
-  });
-
-  const filteredUpcomingAll = upcomingReviewsAll.filter(item => {
-    if (!topicPassesBaseFilter(item.topic, item.subjectId, item.subjectName, item.groupName)) return false;
-    const days = daysUntilReview(item.topic.fsrsNextReview);
-    if (days === null) return false;
-    return days <= upcomingRangeDays;
-  });
-  const upcomingReviews = filteredUpcomingAll.slice(0, upcomingVisibleCount);
+  const filteredUpcomingAll = useMemo(() => (
+    upcomingReviewsAll.filter(item => {
+      if (!topicMatchesFilters(item.topic, item, baseFilters)) return false;
+      const days = daysUntilReview(item.topic.fsrsNextReview);
+      if (days === null) return false;
+      return days <= upcomingRangeDays;
+    })
+  ), [upcomingReviewsAll, baseFilters, upcomingRangeDays]);
+  const upcomingReviews = useMemo(
+    () => filteredUpcomingAll.slice(0, upcomingVisibleCount),
+    [filteredUpcomingAll, upcomingVisibleCount],
+  );
 
   const activeTopicsAll = useMemo(() => {
     const rows: Array<{
@@ -160,30 +245,37 @@ export function ReviewSystem({
       subjectName: string;
       subjectEmoji: string;
       subjectColor: string;
+      groupName: string;
       topic: Topic;
     }> = [];
     for (const subject of subjects) {
-      for (const topic of getAllTopics(subject)) {
-        if (topic.reviewHistory.length === 0) continue;
-        if (!topicPassesBaseFilter(topic, subject.id, subject.name, '')) continue;
-        rows.push({
-          subjectId: subject.id,
-          subjectName: subject.name,
-          subjectEmoji: subject.emoji,
-          subjectColor: subject.color,
-          topic,
-        });
+      for (const group of subject.topicGroups) {
+        for (const topic of group.topics) {
+          if (topic.reviewHistory.length === 0) continue;
+          if (!topicMatchesFilters(topic, {
+            subjectId: subject.id,
+            subjectName: subject.name,
+            groupName: group.name,
+          }, baseFilters)) continue;
+          rows.push({
+            subjectId: subject.id,
+            subjectName: subject.name,
+            subjectEmoji: subject.emoji,
+            subjectColor: subject.color,
+            groupName: group.name,
+            topic,
+          });
+        }
       }
     }
     rows.sort((a, b) => (a.topic.fsrsNextReview || '9999-12-31').localeCompare(b.topic.fsrsNextReview || '9999-12-31'));
     return rows;
-  }, [subjects, subjectFilter, priorityFilter, tagFilter, hasSearchFilter, searchFilter]);
+  }, [subjects, baseFilters]);
 
   // Count totals (respecting active filters)
   const totalWithReviews = activeTopicsAll.length;
   const totalDue = filteredDueReviews.length;
   const totalUpcoming = filteredUpcomingAll.length;
-  const currentFsrsConfig = normalizeFSRSConfig(fsrsConfig);
   const retentionPercent = Math.round(currentFsrsConfig.requestedRetention * 100);
 
   useEffect(() => {
@@ -195,10 +287,102 @@ export function ReviewSystem({
   }, [activeTopicsVisibleCount]);
 
   useEffect(() => {
-    const normalized = normalizeFSRSConfig(fsrsConfig);
-    setWeightsDraft(formatWeightsForInput(normalized.customWeights ?? getDefaultWeights(normalized.version)));
+    setWeightsDraft(formatWeightsForInput(
+      currentFsrsConfig.customWeights ?? getDefaultWeights(currentFsrsConfig.version),
+    ));
     setWeightsError(null);
-  }, [fsrsConfig]);
+  }, [currentFsrsConfig]);
+
+  function findReviewTopic(subjectId: string, groupId: string, topicId: string) {
+    const subject = subjects.find(s => s.id === subjectId);
+    const group = subject?.topicGroups.find(g => g.id === groupId);
+    const topic = group?.topics.find(t => t.id === topicId);
+    if (!subject || !group || !topic) return null;
+    return { subject, group, topic };
+  }
+
+  function updateReviewQuestionProgress(
+    subjectId: string,
+    groupId: string,
+    topicId: string,
+    deltaMade: number,
+    deltaCorrect: number,
+  ) {
+    const found = findReviewTopic(subjectId, groupId, topicId);
+    if (!found) return;
+
+    const safeMade = parseNonNegativeInt(deltaMade);
+    const safeCorrect = Math.min(safeMade, parseNonNegativeInt(deltaCorrect));
+    const nextLogs = [...(found.topic.questionLogs ?? [])];
+
+    if (safeMade > 0 || safeCorrect > 0) {
+      const today = toDateOnlyString(new Date());
+      const existingIdx = nextLogs.findIndex(log => log.date === today);
+      if (existingIdx >= 0) {
+        const existing = nextLogs[existingIdx];
+        nextLogs[existingIdx] = {
+          ...existing,
+          questionsMade: existing.questionsMade + safeMade,
+          questionsCorrect: existing.questionsCorrect + safeCorrect,
+        };
+      } else {
+        nextLogs.push({
+          date: today,
+          questionsMade: safeMade,
+          questionsCorrect: safeCorrect,
+        });
+      }
+    }
+
+    onUpdateSubject({
+      ...found.subject,
+      topicGroups: found.subject.topicGroups.map(group =>
+        group.id === groupId
+          ? {
+              ...group,
+              topics: group.topics.map(topic =>
+                topic.id === topicId
+                  ? {
+                      ...topic,
+                      questionsTotal: topic.questionsTotal + safeMade,
+                      questionsCorrect: topic.questionsCorrect + safeCorrect,
+                      questionLogs: nextLogs,
+                    }
+                  : topic
+              ),
+            }
+          : group
+      ),
+    });
+  }
+
+  function openReviewPopup(subjectId: string, groupId: string, topicId: string) {
+    setActiveReviewTopicId(null);
+    setReviewPopup({ subjectId, groupId, topicId, questionsMade: 0, questionsCorrect: 0 });
+    setReviewPopupError(null);
+  }
+
+  function closeReviewPopup() {
+    setReviewPopup(null);
+    setReviewPopupError(null);
+  }
+
+  function confirmReviewPopup() {
+    if (!reviewPopup) return;
+    if (reviewPopup.questionsCorrect > reviewPopup.questionsMade) {
+      setReviewPopupError('Os acertos nao podem ser maiores que as questoes feitas.');
+      return;
+    }
+    updateReviewQuestionProgress(
+      reviewPopup.subjectId,
+      reviewPopup.groupId,
+      reviewPopup.topicId,
+      reviewPopup.questionsMade,
+      reviewPopup.questionsCorrect,
+    );
+    setActiveReviewTopicId(reviewPopup.topicId);
+    closeReviewPopup();
+  }
 
   function performReview(subjectId: string, groupId: string, topicId: string, rating: FSRSRating) {
     const subject = subjects.find(s => s.id === subjectId);
@@ -220,30 +404,15 @@ export function ReviewSystem({
     const normalizedFsrsConfig = currentFsrsConfig;
     const { newState, intervalDays, retrievability } = fsrsReview(currentState, rating, normalizedFsrsConfig);
 
-    const ratingOption = RATING_OPTIONS.find(r => r.value === rating)!;
-    const performanceScore = topic.questionsTotal > 0
-      ? topic.questionsCorrect / topic.questionsTotal
-      : null;
-
-    const reviewEntry: ReviewEntry = {
-      id: generateReviewId(),
-      reviewNumber: topic.reviewHistory.length + 1,
-      date: toDateOnlyString(new Date()),
+    const reviewEntry = createReviewEntry({
+      topic,
       rating,
-      ratingLabel: ratingOption.label,
-      difficultyBefore: currentState.difficulty,
-      difficultyAfter: newState.difficulty,
-      stabilityBefore: currentState.stability,
-      stabilityAfter: newState.stability,
+      currentState,
+      newState,
       intervalDays,
       retrievability,
-      performanceScore,
-      questionsTotal: topic.questionsTotal,
-      questionsCorrect: topic.questionsCorrect,
-      algorithmVersion: normalizedFsrsConfig.version,
-      requestedRetention: normalizedFsrsConfig.requestedRetention,
-      usedCustomWeights: normalizedFsrsConfig.customWeights !== null,
-    };
+      fsrsConfig: normalizedFsrsConfig,
+    });
 
     onUpdateSubject({
       ...subject,
@@ -294,7 +463,7 @@ export function ReviewSystem({
     const parsed = parseWeightsInput(weightsDraft);
     const expected = getExpectedWeightCount(normalized.version);
     if (parsed.length !== expected) {
-      setWeightsError(`A versão ${FSRS_VERSION_LABEL[normalized.version]} exige ${expected} pesos.`);
+      setWeightsError(`A versÃ£o ${FSRS_VERSION_LABEL[normalized.version]} exige ${expected} pesos.`);
       return;
     }
 
@@ -329,10 +498,10 @@ export function ReviewSystem({
         <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHZpZXdCb3g9IjAgMCA2MCA2MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiPjxnIGZpbGw9IiNmZmYiIGZpbGwtb3BhY2l0eT0iMC4wNSI+PHBhdGggZD0iTTM2IDE4YzEuNjU3IDAgMy0xLjM0MyAzLTNzLTEuMzQzLTMtMy0zLTMgMS4zNDMtMyAzIDEuMzQzIDMgMyAzem0wIDMwYzEuNjU3IDAgMy0xLjM0MyAzLTNzLTEuMzQzLTMtMy0zLTMgMS4zNDMtMyAzIDEuMzQzIDMgMyAzem0tMTgtMTVjMS42NTcgMCAzLTEuMzQzIDMtM3MtMS4zNDMtMy0zLTMtMyAxLjM0My0zIDMgMS4zNDMgMyAzIDN6Ii8+PC9nPjwvZz48L3N2Zz4=')] opacity-50" />
         <div className="relative">
           <h1 className="text-2xl md:text-3xl font-bold text-center flex items-center justify-center gap-3">
-            <Brain size={32} /> Sistema de Revisão Espacada (FSRS)
+            <Brain size={32} /> Sistema de RevisÃ£o Espacada (FSRS)
           </h1>
           <p className="text-center text-purple-200 mt-1 text-sm italic">
-            Algoritmo {FSRS_VERSION_LABEL[currentFsrsConfig.version]} - Otimize sua retenção com revisões inteligentes
+            Algoritmo {FSRS_VERSION_LABEL[currentFsrsConfig.version]} - Otimize sua retenÃ§Ã£o com revisÃµes inteligentes
           </p>
         </div>
       </div>
@@ -340,7 +509,7 @@ export function ReviewSystem({
       {/* FSRS Config */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 space-y-4">
         <div className="flex flex-wrap gap-2 items-center">
-          <span className="text-sm font-semibold text-gray-700">Versão do algoritmo:</span>
+          <span className="text-sm font-semibold text-gray-700">VersÃ£o do algoritmo:</span>
           {(['fsrs5', 'fsrs6'] as FSRSVersion[]).map(version => (
             <button
               key={version}
@@ -356,14 +525,14 @@ export function ReviewSystem({
           ))}
           <span className="text-xs text-gray-500">
             {currentFsrsConfig.version === 'fsrs6'
-              ? 'Modo recente, com curva de esquecimento treinável.'
-              : 'Modo estável e amplamente validado.'}
+              ? 'Modo recente, com curva de esquecimento treinÃ¡vel.'
+              : 'Modo estÃ¡vel e amplamente validado.'}
           </span>
         </div>
 
         <div className="flex flex-wrap gap-3 items-end">
           <div>
-            <label className="text-xs font-medium text-gray-500 block mb-1">Retenção alvo (0.01-0.999)</label>
+            <label className="text-xs font-medium text-gray-500 block mb-1">RetenÃ§Ã£o alvo (0.01-0.999)</label>
             <input
               type="number"
               min="0.01"
@@ -375,13 +544,13 @@ export function ReviewSystem({
             />
           </div>
           <div className="text-xs text-gray-500 pb-2">
-            Equivale a <strong>{retentionPercent}%</strong> de retenção esperada.
+            Equivale a <strong>{retentionPercent}%</strong> de retenÃ§Ã£o esperada.
           </div>
         </div>
 
         <div className="space-y-2">
           <label className="text-xs font-medium text-gray-500 block">
-            Pesos treinados (opcional, separados por vírgula ou espaço)
+            Pesos treinados (opcional, separados por vÃ­rgula ou espaÃ§o)
           </label>
           <textarea
             value={weightsDraft}
@@ -400,7 +569,7 @@ export function ReviewSystem({
               onClick={useDefaultWeights}
               className="px-3 py-1.5 rounded-lg text-xs font-medium bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
             >
-              Usar pesos padrão
+              Usar pesos padrÃ£o
             </button>
             <span className="text-[11px] text-gray-500">
               Esperado: {getExpectedWeightCount(currentFsrsConfig.version)} valores para {FSRS_VERSION_LABEL[currentFsrsConfig.version]}.
@@ -418,7 +587,7 @@ export function ReviewSystem({
       {/* Stats Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 text-center">
-          <p className="text-xs text-gray-500 font-medium mb-1">Com Revisões</p>
+          <p className="text-xs text-gray-500 font-medium mb-1">Com RevisÃµes</p>
           <p className="text-2xl font-bold text-purple-700">{totalWithReviews}</p>
         </div>
         <div className={`rounded-xl shadow-sm border p-4 text-center ${totalDue > 0 ? 'bg-red-50 border-red-200' : 'bg-white border-gray-100'}`}>
@@ -430,7 +599,7 @@ export function ReviewSystem({
           <p className="text-2xl font-bold text-blue-600">{totalUpcoming}</p>
         </div>
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 text-center">
-          <p className="text-xs text-gray-500 font-medium mb-1">Retenção Alvo</p>
+          <p className="text-xs text-gray-500 font-medium mb-1">RetenÃ§Ã£o Alvo</p>
           <p className="text-2xl font-bold text-green-600">{retentionPercent}%</p>
         </div>
       </div>
@@ -438,7 +607,7 @@ export function ReviewSystem({
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-sm font-semibold text-gray-700 inline-flex items-center gap-2">
-            <Filter size={15} /> Filtros avançados de revisão
+            <Filter size={15} /> Filtros avanÃ§ados de revisÃ£o
           </h2>
           {hasAdvancedFilters && (
             <button
@@ -456,20 +625,20 @@ export function ReviewSystem({
             </button>
           )}
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-2">
-          <div className="xl:col-span-2 flex items-center gap-2 rounded-lg border border-gray-200 px-2 py-1.5">
+        <div className="flex flex-nowrap items-center gap-2 overflow-x-auto px-1 pb-1 pr-2">
+          <div className="flex flex-1 min-w-[260px] items-center gap-2 rounded-lg border border-gray-200 px-2 py-1.5">
             <Search size={14} className="text-gray-400" />
             <input
               value={searchFilter}
               onChange={event => setSearchFilter(event.target.value)}
               placeholder="Buscar por assunto, nota ou tag..."
-              className="w-full text-xs bg-transparent outline-none"
+              className="flex-1 min-w-0 text-xs bg-transparent outline-none"
             />
           </div>
           <select
             value={subjectFilter}
             onChange={event => setSubjectFilter(event.target.value)}
-            className="rounded-lg border border-gray-200 px-2 py-1.5 text-xs bg-white"
+            className="shrink-0 min-w-[170px] rounded-lg border border-gray-200 px-2 py-1.5 text-xs bg-white"
           >
             <option value="all">Todas disciplinas</option>
             {subjects.map(subject => (
@@ -479,44 +648,42 @@ export function ReviewSystem({
           <select
             value={priorityFilter}
             onChange={event => setPriorityFilter(event.target.value as 'all' | 'alta' | 'media' | 'baixa' | 'none')}
-            className="rounded-lg border border-gray-200 px-2 py-1.5 text-xs bg-white"
+            className="shrink-0 min-w-[155px] rounded-lg border border-gray-200 px-2 py-1.5 text-xs bg-white"
           >
             <option value="all">Todas prioridades</option>
             <option value="alta">Alta</option>
-            <option value="media">Média</option>
+            <option value="media">MÃ©dia</option>
             <option value="baixa">Baixa</option>
             <option value="none">Sem prioridade</option>
           </select>
           <select
             value={tagFilter}
             onChange={event => setTagFilter(event.target.value)}
-            className="rounded-lg border border-gray-200 px-2 py-1.5 text-xs bg-white"
+            className="shrink-0 min-w-[140px] rounded-lg border border-gray-200 px-2 py-1.5 text-xs bg-white"
           >
             <option value="all">Todas tags</option>
             {availableTags.map(tag => (
               <option key={`tag-filter-${tag}`} value={tag}>#{tag}</option>
             ))}
           </select>
-          <div className="flex items-center gap-2">
-            <select
-              value={dueUrgencyFilter}
-              onChange={event => setDueUrgencyFilter(event.target.value as 'all' | 'overdue' | 'today')}
-              className="flex-1 rounded-lg border border-gray-200 px-2 py-1.5 text-xs bg-white"
-            >
-              <option value="all">Pendentes: todas</option>
-              <option value="overdue">Somente atrasadas</option>
-              <option value="today">Somente hoje</option>
-            </select>
-            <select
-              value={upcomingRangeDays}
-              onChange={event => setUpcomingRangeDays(Number(event.target.value) as 7 | 30 | 3650)}
-              className="flex-1 rounded-lg border border-gray-200 px-2 py-1.5 text-xs bg-white"
-            >
-              <option value={7}>Próximas: 7d</option>
-              <option value={30}>Próximas: 30d</option>
-              <option value={3650}>Próximas: todas</option>
-            </select>
-          </div>
+          <select
+            value={dueUrgencyFilter}
+            onChange={event => setDueUrgencyFilter(event.target.value as 'all' | 'overdue' | 'today')}
+            className="shrink-0 min-w-[165px] rounded-lg border border-gray-200 px-2 py-1.5 text-xs bg-white"
+          >
+            <option value="all">Pendentes: todas</option>
+            <option value="overdue">Somente atrasadas</option>
+            <option value="today">Somente hoje</option>
+          </select>
+          <select
+            value={upcomingRangeDays}
+            onChange={event => setUpcomingRangeDays(Number(event.target.value) as 7 | 30 | 3650)}
+            className="shrink-0 min-w-[150px] rounded-lg border border-gray-200 px-2 py-1.5 text-xs bg-white"
+          >
+            <option value={7}>PrÃ³ximas: 7d</option>
+            <option value={30}>PrÃ³ximas: 30d</option>
+            <option value={3650}>PrÃ³ximas: todas</option>
+          </select>
         </div>
       </div>
 
@@ -526,7 +693,7 @@ export function ReviewSystem({
           <div className="px-5 py-3 bg-red-50 border-b border-red-200 flex items-center gap-2">
             <AlertTriangle size={18} className="text-red-500" />
             <h2 className="font-bold text-red-700 text-lg">
-              Revisões Pendentes ({totalDue})
+              RevisÃµes Pendentes ({totalDue})
             </h2>
           </div>
           <div className="divide-y divide-gray-100">
@@ -569,7 +736,7 @@ export function ReviewSystem({
                       <p className="text-xs text-gray-500 mt-0.5">
                         {item.subjectName}{' -> '}{item.groupName}
                         {item.topic.reviewHistory.length > 0 && (
-                          <span className="ml-2">- Revisão #{item.topic.reviewHistory.length + 1}</span>
+                          <span className="ml-2">- RevisÃ£o #{item.topic.reviewHistory.length + 1}</span>
                         )}
                       </p>
 
@@ -578,7 +745,7 @@ export function ReviewSystem({
                         {item.topic.questionsTotal > 0 && (
                           <span className="flex items-center gap-1">
                             <BarChart3 size={12} />
-                            {item.topic.questionsCorrect}/{item.topic.questionsTotal} questões
+                            {item.topic.questionsCorrect}/{item.topic.questionsTotal} questÃµes
                             ({formatPercent(item.topic.questionsCorrect / item.topic.questionsTotal)})
                           </span>
                         )}
@@ -597,13 +764,19 @@ export function ReviewSystem({
                         {currentRetrievability !== null && (
                           <span className="flex items-center gap-1">
                             <Brain size={12} />
-                            Retenção estimada: {formatPercent(currentRetrievability)}
+                            RetenÃ§Ã£o estimada: {formatPercent(currentRetrievability)}
                           </span>
                         )}
                       </div>
                     </div>
                     <button
-                      onClick={() => setActiveReviewTopicId(isActive ? null : item.topic.id)}
+                      onClick={() => {
+                        if (isActive) {
+                          setActiveReviewTopicId(null);
+                          return;
+                        }
+                        openReviewPopup(item.subjectId, item.groupId, item.topic.id);
+                      }}
                       className={`px-4 py-2 rounded-lg text-sm font-medium transition-all shrink-0 ${
                         isActive
                           ? 'bg-gray-200 text-gray-700'
@@ -619,11 +792,11 @@ export function ReviewSystem({
                     <div className="mt-4 bg-purple-50 rounded-xl p-4 border border-purple-200">
                       <p className="text-sm font-medium text-purple-800 mb-3 flex items-center gap-2">
                         <RotateCcw size={16} />
-                        Como foi a revisão deste assunto?
+                        Como foi a revisÃ£o deste assunto?
                       </p>
                       {suggestedRating && (
                         <p className="text-xs text-purple-600 mb-3 bg-purple-100 px-3 py-1.5 rounded-lg">
-                          Sugestão baseada no desempenho ({formatPercent(item.topic.questionsCorrect / item.topic.questionsTotal)}):
+                          SugestÃ£o baseada no desempenho ({formatPercent(item.topic.questionsCorrect / item.topic.questionsTotal)}):
                           <strong className="ml-1">{RATING_OPTIONS.find(r => r.value === suggestedRating)?.emoji} {RATING_OPTIONS.find(r => r.value === suggestedRating)?.label}</strong>
                         </p>
                       )}
@@ -656,7 +829,7 @@ export function ReviewSystem({
                       >
                         {historyExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                         <History size={14} />
-                        Histórico ({item.topic.reviewHistory.length} revisões)
+                        HistÃ³rico ({item.topic.reviewHistory.length} revisÃµes)
                       </button>
                       {historyExpanded && (
                         <ReviewHistoryTimeline reviews={item.topic.reviewHistory} />
@@ -675,12 +848,12 @@ export function ReviewSystem({
         <div className="bg-green-50 border border-green-200 rounded-xl p-6 text-center">
           <div className="text-4xl mb-2">OK</div>
           <p className="font-bold text-green-700 text-lg">
-            {hasAdvancedFilters ? 'Nenhuma revisão encontrada com os filtros atuais.' : 'Nenhuma revisão pendente!'}
+            {hasAdvancedFilters ? 'Nenhuma revisÃ£o encontrada com os filtros atuais.' : 'Nenhuma revisÃ£o pendente!'}
           </p>
           <p className="text-green-600 text-sm mt-1">
             {hasAdvancedFilters
               ? 'Ajuste os filtros para ampliar os resultados.'
-              : 'Todas as revisões estão em dia. Continue estudando e marcando assuntos para revisão.'}
+              : 'Todas as revisÃµes estÃ£o em dia. Continue estudando e marcando assuntos para revisÃ£o.'}
           </p>
         </div>
       )}
@@ -691,14 +864,14 @@ export function ReviewSystem({
           <div className="px-5 py-3 bg-blue-50 border-b border-blue-200 flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <Calendar size={18} className="text-blue-600" />
-              <h2 className="font-bold text-blue-700">Próximas Revisões</h2>
+              <h2 className="font-bold text-blue-700">PrÃ³ximas RevisÃµes</h2>
             </div>
             <div className="flex items-center gap-2 text-xs text-blue-700">
               <span>Mostrar:</span>
               <select
                 value={upcomingVisibleCount}
                 onChange={event => setUpcomingVisibleCount(Number(event.target.value) as VisibleCount)}
-                aria-label="Quantidade de próximas revisões"
+                aria-label="Quantidade de prÃ³ximas revisÃµes"
                 className="rounded-md border border-blue-200 bg-white px-2 py-1 text-xs"
               >
                 {VISIBLE_COUNT_OPTIONS.map(option => (
@@ -726,7 +899,7 @@ export function ReviewSystem({
                     </p>
                   </div>
                   <span className={`text-xs px-2.5 py-1 rounded-full font-medium shrink-0 ${status.className}`}>
-                    {days !== null && days === 1 ? 'Amanhã' : status.text}
+                    {days !== null && days === 1 ? 'AmanhÃ£' : status.text}
                   </span>
                   <ArrowRight size={14} className="text-gray-300 shrink-0" />
                 </div>
@@ -741,7 +914,7 @@ export function ReviewSystem({
         <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <TrendingUp size={18} className="text-gray-600" />
-            <h2 className="font-bold text-gray-700">Assuntos com Revisão Ativa</h2>
+            <h2 className="font-bold text-gray-700">Assuntos com RevisÃ£o Ativa</h2>
           </div>
           <div className="flex items-center gap-2 text-xs text-gray-600">
             <span>Mostrar:</span>
@@ -760,9 +933,9 @@ export function ReviewSystem({
         {totalWithReviews === 0 ? (
           <div className="p-8 text-center">
             <Brain size={48} className="mx-auto text-gray-300 mb-3" />
-            <p className="text-gray-500 font-medium mb-1">Nenhum assunto com revisão ativa</p>
+            <p className="text-gray-500 font-medium mb-1">Nenhum assunto com revisÃ£o ativa</p>
             <p className="text-gray-400 text-sm">
-              Para iniciar, vá a uma disciplina, marque um assunto como estudado e clique em "Iniciar Revisão FSRS".
+              Para iniciar, vÃ¡ a uma disciplina, marque um assunto como estudado e clique em "Iniciar RevisÃ£o FSRS".
             </p>
           </div>
         ) : (
@@ -787,7 +960,7 @@ export function ReviewSystem({
                       <div className="flex flex-wrap gap-2 mt-1 text-xs text-gray-500">
                         <span>{item.subjectName}</span>
                         <span>-</span>
-                        <span>Revisões: {item.topic.reviewHistory.length}</span>
+                        <span>RevisÃµes: {item.topic.reviewHistory.length}</span>
                         <span>-</span>
                         <span className={diffLabel.color}>Dif: {item.topic.fsrsDifficulty.toFixed(1)}</span>
                         <span>-</span>
@@ -818,7 +991,7 @@ export function ReviewSystem({
                     >
                       {historyExpanded2 ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                       <History size={14} />
-                      Ver histórico
+                      Ver histÃ³rico
                     </button>
                   )}
                   {historyExpanded2 && (
@@ -839,25 +1012,115 @@ export function ReviewSystem({
         </h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-purple-700">
           <div className="space-y-2">
-            <p><strong>Esqueci (1):</strong> Estabilidade cai drasticamente, revisão em breve</p>
-            <p><strong>Difícil (2):</strong> Intervalo cresce pouco, dificuldade aumenta</p>
+            <p><strong>Esqueci (1):</strong> Estabilidade cai drasticamente, revisÃ£o em breve</p>
+            <p><strong>DifÃ­cil (2):</strong> Intervalo cresce pouco, dificuldade aumenta</p>
           </div>
           <div className="space-y-2">
             <p><strong>Bom (3):</strong> Crescimento normal do intervalo</p>
-            <p><strong>Fácil (4):</strong> Intervalo cresce bastante, revisão mais distante</p>
+            <p><strong>FÃ¡cil (4):</strong> Intervalo cresce bastante, revisÃ£o mais distante</p>
           </div>
         </div>
         <div className="mt-3 text-xs text-purple-600 bg-purple-100 rounded-lg p-3">
-          O sistema sugere automaticamente uma avaliação baseada no seu desempenho em questões.
-          Cada revisão cria um novo bloco no histórico, permitindo acompanhar a evolução ao longo do tempo.
+          O sistema sugere automaticamente uma avaliaÃ§Ã£o baseada no seu desempenho em questÃµes.
+          Cada revisÃ£o cria um novo bloco no histÃ³rico, permitindo acompanhar a evoluÃ§Ã£o ao longo do tempo.
         </div>
       </div>
+
+      {reviewPopup && (() => {
+        const info = findReviewTopic(reviewPopup.subjectId, reviewPopup.groupId, reviewPopup.topicId);
+        if (!info) return null;
+        const total = info.topic.questionsTotal;
+        const correct = info.topic.questionsCorrect;
+        return (
+          <div className="fixed inset-0 z-[90] bg-black/50 flex items-center justify-center p-4" onClick={closeReviewPopup}>
+            <div
+              className="w-full max-w-md rounded-2xl bg-white border border-slate-200 shadow-2xl"
+              onClick={event => event.stopPropagation()}
+            >
+              <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs text-slate-500">Revisao pendente</p>
+                  <h3 className="text-base font-semibold text-slate-800">Registrar desempenho da revisao</h3>
+                </div>
+                <button
+                  onClick={closeReviewPopup}
+                  className="p-1.5 rounded-md text-slate-400 hover:text-slate-600 hover:bg-slate-100"
+                  title="Fechar"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+
+              <div className="p-5 space-y-4">
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                  <p className="font-medium text-slate-700">{info.subject.name} - {info.topic.name}</p>
+                  <p>Total atual: {correct}/{total} questoes</p>
+                  <p>Os valores abaixo serao somados ao total do assunto.</p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-medium text-slate-600">Questoes feitas</label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={reviewPopup.questionsMade}
+                      onChange={event => setReviewPopup(prev => prev ? {
+                        ...prev,
+                        questionsMade: parseNonNegativeInt(event.target.value),
+                        questionsCorrect: Math.min(prev.questionsCorrect, parseNonNegativeInt(event.target.value)),
+                      } : prev)}
+                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-slate-600">Acertos</label>
+                    <input
+                      type="number"
+                      min="0"
+                      max={reviewPopup.questionsMade}
+                      value={reviewPopup.questionsCorrect}
+                      onChange={event => setReviewPopup(prev => prev ? {
+                        ...prev,
+                        questionsCorrect: Math.min(parseNonNegativeInt(event.target.value), prev.questionsMade),
+                      } : prev)}
+                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400"
+                    />
+                  </div>
+                </div>
+
+                {reviewPopupError && (
+                  <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                    {reviewPopupError}
+                  </p>
+                )}
+              </div>
+
+              <div className="px-5 py-4 border-t border-slate-100 flex items-center justify-end gap-2">
+                <button
+                  onClick={closeReviewPopup}
+                  className="px-3 py-2 rounded-lg text-sm bg-slate-100 text-slate-700 hover:bg-slate-200"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={confirmReviewPopup}
+                  className="px-3 py-2 rounded-lg text-sm text-white bg-purple-600 hover:bg-purple-700"
+                >
+                  Continuar para revisao
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
     </div>
   );
 }
 
 // ---- Review History Timeline Component ----
-function ReviewHistoryTimeline({ reviews }: { reviews: ReviewEntry[] }) {
+const ReviewHistoryTimeline = memo(function ReviewHistoryTimeline({ reviews }: { reviews: ReviewEntry[] }) {
   return (
     <div className="mt-3 pl-4 border-l-2 border-purple-200 space-y-3">
       {reviews.map((rev) => {
@@ -866,7 +1129,7 @@ function ReviewHistoryTimeline({ reviews }: { reviews: ReviewEntry[] }) {
           <div key={rev.id} className={`rounded-lg p-3 border ${ratingOpt?.borderColor || 'border-gray-200'} ${ratingOpt?.lightBg || 'bg-gray-50'}`}>
             <div className="flex items-center gap-2 flex-wrap">
               <span className={`text-xs px-2 py-0.5 rounded-full text-white font-medium ${ratingOpt?.color || 'bg-gray-500'}`}>
-                Revisão #{rev.reviewNumber}
+                RevisÃ£o #{rev.reviewNumber}
               </span>
               <span className="text-xs text-gray-500">{formatDate(rev.date)}</span>
               <span className="text-sm">{ratingOpt?.emoji}</span>
@@ -884,7 +1147,7 @@ function ReviewHistoryTimeline({ reviews }: { reviews: ReviewEntry[] }) {
               </span>
               {rev.retrievability !== null && (
                 <span>
-                  Retenção: <strong>{formatPercent(rev.retrievability)}</strong>
+                  RetenÃ§Ã£o: <strong>{formatPercent(rev.retrievability)}</strong>
                 </span>
               )}
               {rev.performanceScore !== null && (
@@ -898,7 +1161,8 @@ function ReviewHistoryTimeline({ reviews }: { reviews: ReviewEntry[] }) {
       })}
     </div>
   );
-}
+});
+ReviewHistoryTimeline.displayName = 'ReviewHistoryTimeline';
 
 // ---- Inline Review Widget for SubjectDetail ----
 export function TopicReviewWidget({
@@ -922,11 +1186,8 @@ export function TopicReviewWidget({
   const hasReviews = topic.reviewHistory.length > 0;
   const normalizedFsrsConfig = normalizeFSRSConfig(fsrsConfig);
   const status = getReviewStatus(topic.fsrsNextReview);
-  const isDue = topic.fsrsNextReview ? (() => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    return new Date(topic.fsrsNextReview + 'T00:00:00') <= today;
-  })() : false;
+  const isDue = topic.fsrsNextReview !== null
+    && topic.fsrsNextReview <= toDateOnlyString(new Date());
   const suggestedRating = suggestRatingFromPerformance(topic.questionsTotal, topic.questionsCorrect);
 
   function doReview(rating: FSRSRating) {
@@ -938,30 +1199,15 @@ export function TopicReviewWidget({
     };
 
     const { newState, intervalDays, retrievability } = fsrsReview(currentState, rating, normalizedFsrsConfig);
-    const ratingOption = RATING_OPTIONS.find(r => r.value === rating)!;
-    const performanceScore = topic.questionsTotal > 0
-      ? topic.questionsCorrect / topic.questionsTotal
-      : null;
-
-    const reviewEntry: ReviewEntry = {
-      id: generateReviewId(),
-      reviewNumber: topic.reviewHistory.length + 1,
-      date: toDateOnlyString(new Date()),
+    const reviewEntry = createReviewEntry({
+      topic,
       rating,
-      ratingLabel: ratingOption.label,
-      difficultyBefore: currentState.difficulty,
-      difficultyAfter: newState.difficulty,
-      stabilityBefore: currentState.stability,
-      stabilityAfter: newState.stability,
+      currentState,
+      newState,
       intervalDays,
       retrievability,
-      performanceScore,
-      questionsTotal: topic.questionsTotal,
-      questionsCorrect: topic.questionsCorrect,
-      algorithmVersion: normalizedFsrsConfig.version,
-      requestedRetention: normalizedFsrsConfig.requestedRetention,
-      usedCustomWeights: normalizedFsrsConfig.customWeights !== null,
-    };
+      fsrsConfig: normalizedFsrsConfig,
+    });
 
     onUpdate(subjectId, groupId, topic.id, {
       fsrsDifficulty: newState.difficulty,
@@ -988,7 +1234,7 @@ export function TopicReviewWidget({
             onClick={() => setShowRating(true)}
             className="text-xs px-2.5 py-1 rounded-full bg-purple-100 text-purple-700 hover:bg-purple-200 transition-colors font-medium"
           >
-            Iniciar Revisão
+            Iniciar RevisÃ£o
           </button>
         )}
 
@@ -1030,11 +1276,11 @@ export function TopicReviewWidget({
       {showRating && (
         <div className="mt-2 bg-purple-50 rounded-lg p-3 border border-purple-200">
           <p className="text-xs text-purple-700 font-medium mb-2">
-            {hasReviews ? `Revisão #${topic.reviewHistory.length + 1}` : 'Primeira revisão'} - Como foi?
+            {hasReviews ? `RevisÃ£o #${topic.reviewHistory.length + 1}` : 'Primeira revisÃ£o'} - Como foi?
           </p>
           {suggestedRating && topic.questionsTotal > 0 && (
             <p className="text-[10px] text-purple-600 mb-2 bg-purple-100 px-2 py-1 rounded">
-              Sugestão: {RATING_OPTIONS.find(r => r.value === suggestedRating)?.emoji} {RATING_OPTIONS.find(r => r.value === suggestedRating)?.label}
+              SugestÃ£o: {RATING_OPTIONS.find(r => r.value === suggestedRating)?.emoji} {RATING_OPTIONS.find(r => r.value === suggestedRating)?.label}
               {' '}(baseado em {formatPercent(topic.questionsCorrect / topic.questionsTotal)} de acerto)
             </p>
           )}
@@ -1070,7 +1316,7 @@ export function TopicReviewWidget({
           >
             {showHistory ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
             <History size={12} />
-            Histórico ({topic.reviewHistory.length} revisões)
+            HistÃ³rico ({topic.reviewHistory.length} revisÃµes)
           </button>
           {showHistory && (
             <div className="mt-1">
@@ -1079,6 +1325,7 @@ export function TopicReviewWidget({
           )}
         </div>
       )}
+
     </div>
   );
 }

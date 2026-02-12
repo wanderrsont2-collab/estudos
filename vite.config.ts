@@ -1,24 +1,22 @@
-import path from "path";
-import { fileURLToPath } from "url";
-import tailwindcss from "@tailwindcss/vite";
-import react from "@vitejs/plugin-react";
-import { defineConfig } from "vitest/config";
-import { viteSingleFile } from "vite-plugin-singlefile";
+import { defineConfig } from 'vite'
+import path from 'path'
+import electron from 'vite-plugin-electron'
+import react from '@vitejs/plugin-react'
+import tailwindcss from "@tailwindcss/vite"
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), tailwindcss(), viteSingleFile()],
+  plugins: [
+    react(),
+    tailwindcss(),
+    electron({
+      entry: 'electron/main.ts',
+    }),
+  ],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src"),
     },
   },
-  test: {
-    environment: "jsdom",
-    setupFiles: ["./src/test/setup.ts"],
-    css: true,
-  },
-});
+  // Importante para que o app ache os arquivos JS/CSS quando rodar localmente
+  base: './', 
+})

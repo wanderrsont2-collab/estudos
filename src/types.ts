@@ -105,6 +105,15 @@ export interface StudyGoals {
   weeklyEssayTarget: number;
 }
 
+export interface StudySession {
+  id: string;
+  subjectId: string;
+  startTime: string; // ISO
+  endTime: string; // ISO
+  durationMinutes: number;
+  type: 'questions' | 'review' | 'reading' | 'essay';
+}
+
 export interface StudyData {
   subjects: Subject[];
   settings: {

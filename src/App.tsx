@@ -716,20 +716,20 @@ export function App() {
             </h1>
           </div>
           <div className="flex items-center gap-2">
-            <div className="relative hidden md:block">
-              <div className="flex items-center gap-2 rounded-lg bg-white/10 border border-white/20 px-2 py-1.5">
+            <div className="relative hidden md:block global-search-shell">
+              <div className="flex items-center gap-2 rounded-lg bg-white/10 border border-white/20 px-2.5 py-2 backdrop-blur-sm">
                 <Search size={14} className="text-white/80" />
                 <input
                   ref={globalSearchRef}
                   value={globalSearchQuery}
                   onChange={event => setGlobalSearchQuery(event.target.value)}
                   placeholder="Buscar assuntos, tags e notas... (Ctrl+K)"
-                  className="w-56 bg-transparent text-sm text-white placeholder:text-white/70 outline-none"
+                  className="w-64 lg:w-72 bg-transparent text-xs lg:text-sm leading-5 text-white placeholder:text-white/70 outline-none"
                 />
                 <select
                   value={globalSearchType}
                   onChange={event => setGlobalSearchType(event.target.value as 'all' | 'subject' | 'topic' | 'tag')}
-                  className="rounded-md border border-white/20 bg-white/10 px-1.5 py-0.5 text-[11px] text-white/90"
+                  className="rounded-md border border-white/20 bg-white/10 px-2 py-1 text-[11px] text-white/90"
                 >
                   <option value="all" className="text-slate-900">Tudo</option>
                   <option value="subject" className="text-slate-900">Disciplinas</option>
