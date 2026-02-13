@@ -18,7 +18,7 @@ import {
 import {
   ArrowLeft, Plus, Trash2, Check, X, BookOpen, Edit3, Save,
   ChevronDown, ChevronRight, FolderPlus, Calendar, AlertTriangle,
-  Clock, Flag, Brain, Sparkles, Tag,
+  Clock, Flag, Brain, Sparkles, Tag, List, LayoutGrid,
 } from 'lucide-react';
 
 interface SubjectDetailProps {
@@ -133,6 +133,10 @@ export function SubjectDetail({ subject, globalTagSuggestions, fsrsConfig, onBac
   const [tagFilter, setTagFilter] = useState<string>(() => {
     const stored = window.localStorage.getItem(`subject_tag_filter_${subject.id}`);
     return stored && stored.trim().length > 0 ? stored : 'all';
+  });
+  const [viewMode, setViewMode] = useState<'list' | 'cards'>(() => {
+    const stored = window.localStorage.getItem(`subject_view_mode_${subject.id}`);
+    return stored === 'cards' ? 'cards' : 'list';
   });
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [editGroupName, setEditGroupName] = useState('');
@@ -464,6 +468,10 @@ export function SubjectDetail({ subject, globalTagSuggestions, fsrsConfig, onBac
   }, [tagFilter, subject.id]);
 
   useEffect(() => {
+    window.localStorage.setItem(`subject_view_mode_${subject.id}`, viewMode);
+  }, [viewMode, subject.id]);
+
+  useEffect(() => {
     const statusStored = window.localStorage.getItem(`subject_status_filter_${subject.id}`);
     setStatusFilter(statusStored === 'studied' || statusStored === 'pending' ? statusStored : 'all');
 
@@ -472,6 +480,9 @@ export function SubjectDetail({ subject, globalTagSuggestions, fsrsConfig, onBac
 
     const tagStored = window.localStorage.getItem(`subject_tag_filter_${subject.id}`);
     setTagFilter(tagStored && tagStored.trim().length > 0 ? tagStored : 'all');
+
+    const viewModeStored = window.localStorage.getItem(`subject_view_mode_${subject.id}`);
+    setViewMode(viewModeStored === 'cards' ? 'cards' : 'list');
   }, [subject.id]);
 
   useEffect(() => {
@@ -684,6 +695,33 @@ export function SubjectDetail({ subject, globalTagSuggestions, fsrsConfig, onBac
               <option key={tag} value={tag}>#{tag}</option>
             ))}
           </select>
+
+          <span className="text-gray-300 mx-1">|</span>
+
+          <div className="flex items-center gap-1 ml-auto">
+            <button
+              onClick={() => setViewMode('list')}
+              className={`p-2 rounded-lg transition-all ${
+                viewMode === 'list'
+                  ? 'bg-gray-200 text-gray-800'
+                  : 'text-gray-400 hover:text-gray-600'
+              }`}
+              title="Visualização em lista"
+            >
+              <List size={16} />
+            </button>
+            <button
+              onClick={() => setViewMode('cards')}
+              className={`p-2 rounded-lg transition-all ${
+                viewMode === 'cards'
+                  ? 'bg-gray-200 text-gray-800'
+                  : 'text-gray-400 hover:text-gray-600'
+              }`}
+              title="Visualização em cards"
+            >
+              <LayoutGrid size={16} />
+            </button>
+          </div>
         </div>
       )}
 
@@ -855,7 +893,7 @@ export function SubjectDetail({ subject, globalTagSuggestions, fsrsConfig, onBac
                         <BookOpen size={24} className="mx-auto mb-2 text-gray-300" />
                         Nenhum assunto adicionado neste topico ainda.
                       </div>
-                    ) : (
+                    ) : viewMode === 'list' ? (
                       <div className="divide-y divide-gray-50">
                         {filtered.map((topic) => (
                           <TopicRow
@@ -887,6 +925,77 @@ export function SubjectDetail({ subject, globalTagSuggestions, fsrsConfig, onBac
                             onRemoveTag={removeTagFromTopic}
                           />
                         ))}
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 p-4">
+                        {filtered.map((topic) => {
+                          const accuracy = topic.questionsTotal > 0 ? topic.questionsCorrect / topic.questionsTotal : 0;
+                          const isDue = isReviewDue(topic.fsrsNextReview);
+                          const reviewStatus = getReviewStatus(topic.fsrsNextReview);
+                          
+                          let cardBorderBg = 'bg-white border-gray-200 hover:border-gray-300';
+                          if (topic.studied) {
+                            cardBorderBg = 'bg-green-50 border-green-200';
+                          } else if (isDue) {
+                            cardBorderBg = 'bg-purple-50 border-purple-200';
+                          }
+
+                          return (
+                            <div
+                              key={topic.id}
+                              onClick={() => openStudyPopup(group.id, topic.id)}
+                              className={`rounded-xl border p-4 cursor-pointer transition-all hover:shadow-md ${cardBorderBg}`}
+                            >
+                              {/* Header row */}
+                              <div className="flex items-start justify-between gap-2">
+                                <h4 className={`font-semibold text-sm ${topic.studied ? 'line-through text-gray-400' : 'text-gray-800'}`}>
+                                  {topic.name}
+                                </h4>
+                                {topic.studied && <Check size={16} className="text-green-500 shrink-0" />}
+                              </div>
+
+                              {/* Badges row */}
+                              <div className="flex flex-wrap gap-1 mt-2">
+                                <PriorityBadge priority={topic.priority} size="xs" />
+                                <DeadlineBadge deadline={topic.deadline} size="xs" />
+                              </div>
+
+                              {/* Accuracy/progress section */}
+                              {topic.questionsTotal > 0 && (
+                                <div className="mt-3">
+                                  <div className="flex justify-between text-[10px] text-gray-500 mb-1">
+                                    <span>Rendimento</span>
+                                    <span className="font-bold">{formatPercent(accuracy)}</span>
+                                  </div>
+                                  <ProgressBar
+                                    value={accuracy}
+                                    color={accuracy >= 0.7 ? '#16a34a' : accuracy >= 0.5 ? '#d97706' : '#dc2626'}
+                                  />
+                                </div>
+                              )}
+
+                              {/* Tags */}
+                              {(topic.tags ?? []).length > 0 && (
+                                <div className="flex flex-wrap gap-1 mt-2">
+                                  {(topic.tags ?? []).slice(0, 3).map(tag => (
+                                    <span
+                                      key={`${topic.id}-${tag}-card`}
+                                      className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500"
+                                    >
+                                      #{tag}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+
+                              {/* FSRS review status */}
+                              <div className="mt-2 text-[10px] text-purple-500 flex items-center gap-1">
+                                <Brain size={10} />
+                                {reviewStatus.text}
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
