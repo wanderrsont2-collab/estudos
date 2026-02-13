@@ -356,6 +356,17 @@ export function App() {
   }, []);
 
   const selectedSubject = data.subjects.find(s => s.id === selectedSubjectId) || null;
+  const globalTagSuggestions = useMemo(() => {
+    const unique = new Set<string>();
+    for (const subject of data.subjects) {
+      for (const group of subject.topicGroups) {
+        for (const topic of group.topics) {
+          for (const tag of topic.tags ?? []) unique.add(tag);
+        }
+      }
+    }
+    return Array.from(unique).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  }, [data.subjects]);
   const reviewsDueCount = getReviewsDue(data.subjects).length;
   const contextMenuSubject = subjectContextMenu
     ? data.subjects.find(s => s.id === subjectContextMenu.subjectId) || null
@@ -1024,6 +1035,7 @@ export function App() {
           ) : view === 'subject' && selectedSubject ? (
             <SubjectDetail
               subject={selectedSubject}
+              globalTagSuggestions={globalTagSuggestions}
               fsrsConfig={data.settings.fsrs}
               onBack={navigateToOverview}
               onUpdate={updateSubject}

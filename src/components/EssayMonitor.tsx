@@ -578,7 +578,6 @@ export function EssayMonitor({ settings, onUpdateSettings }: EssayMonitorProps) 
 
   function toggleCommand(cmd: EditorCommand) {
     execEditorCommand(cmd);
-    setDraft(prev => ({ ...prev, content: normalizeEditorHtml(editorRef.current?.innerHTML || prev.content) }));
   }
 
   function openTimer() {
@@ -777,7 +776,16 @@ export function EssayMonitor({ settings, onUpdateSettings }: EssayMonitorProps) 
                     {COMPETENCIES.map(c => (
                       <label key={`draft-${c.key}`} className="text-xs text-slate-600 dark:text-slate-300">
                         <span className="font-semibold">{c.short}</span>
-                        <input type="number" min={0} max={200} step={10} value={draft[c.key]} onChange={e => updateDraftScore(c.key, e.target.value)} className={`${INPUT_CLASSES} text-center`} />
+                        <input
+                          type="number"
+                          min={0}
+                          max={200}
+                          step={10}
+                          value={draft[c.key]}
+                          onFocus={event => event.currentTarget.select()}
+                          onChange={e => updateDraftScore(c.key, e.target.value)}
+                          className={`${INPUT_CLASSES} text-center`}
+                        />
                       </label>
                     ))}
                   </div>
@@ -796,8 +804,7 @@ export function EssayMonitor({ settings, onUpdateSettings }: EssayMonitorProps) 
                     ref={editorRef}
                     contentEditable
                     suppressContentEditableWarning
-                    onInput={event => setDraft(prev => ({ ...prev, content: normalizeEditorHtml(event.currentTarget.innerHTML) }))}
-                    className="min-h-[120px] rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-400 text-slate-800 dark:text-slate-100 caret-blue-500 selection:bg-indigo-500 selection:text-white [&_*]:!text-slate-800 dark:[&_*]:!text-slate-100"
+                    className="min-h-[120px] rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-400 text-slate-800 dark:text-slate-100 caret-blue-500 selection:bg-indigo-500 selection:text-white [&_*]:!text-inherit"
                   />
                 </div>
               </div>

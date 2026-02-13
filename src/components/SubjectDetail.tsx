@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+﻿import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Subject, Topic, TopicGroup, Priority, type ReviewEntry } from '../types';
 import {
   createTopic, createTopicGroup, getSubjectStats, getGroupStats, generateId,
@@ -23,6 +23,7 @@ import {
 
 interface SubjectDetailProps {
   subject: Subject;
+  globalTagSuggestions: string[];
   fsrsConfig: FSRSConfig;
   onBack: () => void;
   onUpdate: (subject: Subject) => void;
@@ -30,6 +31,7 @@ interface SubjectDetailProps {
 
 type StatusFilter = 'all' | 'studied' | 'pending';
 const PRIORITY_OPTIONS: Priority[] = ['alta', 'media', 'baixa'];
+const COMMON_TAG_PRESETS = ['dificil', 'medio', 'facil'] as const;
 
 interface StudyPopupState {
   groupId: string;
@@ -117,7 +119,7 @@ function DeadlineBadge({ deadline, size = 'sm' }: { deadline: string | null; siz
   );
 }
 
-export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: SubjectDetailProps) {
+export function SubjectDetail({ subject, globalTagSuggestions, fsrsConfig, onBack, onUpdate }: SubjectDetailProps) {
   const [newGroupName, setNewGroupName] = useState('');
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [statusFilter, setStatusFilter] = useState<StatusFilter>(() => {
@@ -158,6 +160,13 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
     }
     return Array.from(unique).sort((a, b) => a.localeCompare(b, 'pt-BR'));
   }, [allTopics]);
+  const tagSuggestionCatalog = useMemo(() => {
+    const unique = new Set<string>(COMMON_TAG_PRESETS);
+    for (const tag of globalTagSuggestions) unique.add(tag);
+    for (const tag of allAvailableTags) unique.add(tag);
+    return Array.from(unique).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  }, [allAvailableTags, globalTagSuggestions]);
+  const tagSuggestionListId = `subject-tag-suggestions-${subject.id}`;
 
   function updateTopicGroups(updater: (groups: TopicGroup[]) => TopicGroup[]) {
     onUpdate({
@@ -473,6 +482,11 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
 
   return (
     <div className="space-y-6 pb-20 lg:pb-6">
+      <datalist id={tagSuggestionListId}>
+        {tagSuggestionCatalog.map(tag => (
+          <option key={`tag-suggestion-${tag}`} value={tag} />
+        ))}
+      </datalist>
       {/* Header */}
       <div
         className="rounded-2xl p-6 text-white shadow-xl relative overflow-hidden"
@@ -484,13 +498,13 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
             onClick={onBack}
             className="flex items-center gap-2 text-white/80 hover:text-white mb-3 transition-colors text-sm"
           >
-            <ArrowLeft size={18} /> Voltar para Visão Geral
+            <ArrowLeft size={18} /> Voltar para Visao Geral
           </button>
           <h1 className="text-2xl md:text-3xl font-bold">
             {subject.emoji} {subject.name}
           </h1>
           <p className="text-white/70 mt-1 text-sm">
-            Gerencie tópicos, assuntos, prioridades, prazos e revisões
+            Gerencie topicos, assuntos, prioridades, prazos e revisoes
           </p>
           {/* Alerts */}
           <div className="flex flex-wrap gap-2 mt-3">
@@ -506,7 +520,7 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
             )}
             {reviewsDueCount > 0 && (
               <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-purple-500/20 text-white text-xs font-medium">
-                {"\u{1F9E0}"} {reviewsDueCount} revisão(oes) pendente(s)
+                {"\u{1F9E0}"} {reviewsDueCount} revisoes pendentes
               </span>
             )}
           </div>
@@ -518,10 +532,10 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
         {[
           { label: '\u{1F4DA} Estudados', value: stats.studied },
           { label: '\u{1F4CB} Total', value: stats.total },
-          { label: '\u{1F4C1} Tópicos', value: subject.topicGroups.length },
-          { label: '\u{1F4DD} Questões', value: stats.questionsTotal },
+          { label: '\u{1F4C1} Topicos', value: subject.topicGroups.length },
+          { label: '\u{1F4DD} Questoes', value: stats.questionsTotal },
           { label: '\u{1F4CA} Rendimento', value: formatPercent(stats.rendimento) },
-          { label: '\u{1F9E0} Revisões', value: stats.reviewsDue > 0 ? `${stats.reviewsDue} \u{1F514}` : '0' },
+          { label: '\u{1F9E0} Revisoes', value: stats.reviewsDue > 0 ? `${stats.reviewsDue} \u{1F514}` : '0' },
         ].map((card, i) => (
           <div key={i} className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 text-center">
             <p className="text-xs text-gray-500 font-medium mb-1">{card.label}</p>
@@ -538,7 +552,7 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
         </div>
         <ProgressBar value={stats.progresso} color={subject.color} />
         <p className="text-xs text-gray-400 mt-2 text-center italic">
-          {stats.studied} de {stats.total} conteúdos estudados
+          {stats.studied} de {stats.total} conteudos estudados
         </p>
       </div>
 
@@ -546,10 +560,10 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 space-y-3">
         <h3 className="font-bold text-gray-800 flex items-center gap-2">
           <FolderPlus size={18} style={{ color: subject.color }} />
-          Adicionar Tópico
+          Adicionar Topico
         </h3>
         <p className="text-xs text-gray-500">
-          Crie tópicos para organizar seus assuntos (ex: "Matemática Basica", "Geometria", "Algebra")
+          Crie topicos para organizar seus assuntos (ex: "Matematica Basica", "Geometria", "Algebra")
         </p>
         <div className="flex gap-2">
           <input
@@ -557,7 +571,7 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
             value={newGroupName}
             onChange={e => setNewGroupName(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && addGroup()}
-            placeholder='Nome do tópico (ex: "Matemática Basica")'
+            placeholder='Nome do topico (ex: "Matematica Basica")'
             className="flex-1 border border-gray-300 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:border-transparent"
             style={getRingColorStyle(subject.color)}
           />
@@ -577,18 +591,18 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
           className="text-sm hover:underline transition-colors flex items-center gap-1"
           style={{ color: subject.color }}
         >
-          {showStructuredImport ? 'Fechar importacao' : '\u{1F4CB} Importar estrutura completa (tópicos + assuntos)'}
+          {showStructuredImport ? 'Fechar importacao' : '\u{1F4CB} Importar estrutura completa (topicos + assuntos)'}
         </button>
 
         {showStructuredImport && (
           <div className="space-y-2 bg-gray-50 rounded-lg p-4">
             <p className="text-xs text-gray-600">
-              Use <code className="bg-gray-200 px-1 rounded">#</code> para criar tópicos e linhas simples para assuntos:
+              Use <code className="bg-gray-200 px-1 rounded">#</code> para criar topicos e linhas simples para assuntos:
             </p>
             <textarea
               value={structuredImportText}
               onChange={e => setStructuredImportText(e.target.value)}
-              placeholder={`# Matemática Basica\nQuatro operacoes\nFracoes\nPotenciacao\n\n# Geometria\nAreas\nVolumes\nTriangulos`}
+              placeholder={`# Matematica Basica\nQuatro operacoes\nFracoes\nPotenciacao\n\n# Geometria\nAreas\nVolumes\nTriangulos`}
               className="w-full border border-gray-300 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:border-transparent h-40 resize-y font-mono"
               style={getRingColorStyle(subject.color)}
             />
@@ -677,9 +691,9 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
       {subject.topicGroups.length === 0 ? (
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-8 text-center">
           <FolderPlus size={48} className="mx-auto text-gray-300 mb-3" />
-          <p className="text-gray-500 font-medium mb-1">Nenhum tópico criado ainda</p>
+          <p className="text-gray-500 font-medium mb-1">Nenhum topico criado ainda</p>
           <p className="text-gray-400 text-sm">
-            Crie tópicos acima para organizar seus assuntos de estudo.
+            Crie topicos acima para organizar seus assuntos de estudo.
           </p>
         </div>
       ) : (
@@ -737,7 +751,7 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
                           )}
                           {groupStats.reviewsDue > 0 && (
                             <span className="text-xs px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 font-medium flex items-center gap-1">
-                              <Brain size={10} /> {groupStats.reviewsDue} revisão(oes)
+                              <Brain size={10} /> {groupStats.reviewsDue} revisoes
                             </span>
                           )}
                         </div>
@@ -758,7 +772,7 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
                         <button
                           onClick={() => { setEditingGroupId(group.id); setEditGroupName(group.name); }}
                           className="p-1.5 text-gray-400 hover:text-blue-600 transition-colors rounded-lg hover:bg-blue-50"
-                          title="Renomear tópico"
+                          title="Renomear topico"
                         >
                           <Edit3 size={14} />
                         </button>
@@ -771,7 +785,7 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
                           <button
                             onClick={() => setDeleteConfirm(`group-${group.id}`)}
                             className="p-1.5 text-gray-400 hover:text-red-600 transition-colors rounded-lg hover:bg-red-50"
-                            title="Excluir tópico"
+                            title="Excluir topico"
                           >
                             <Trash2 size={14} />
                           </button>
@@ -839,7 +853,7 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
                     ) : filtered.length === 0 ? (
                       <div className="px-4 py-6 text-center text-sm text-gray-400">
                         <BookOpen size={24} className="mx-auto mb-2 text-gray-300" />
-                        Nenhum assunto adicionado neste tópico ainda.
+                        Nenhum assunto adicionado neste topico ainda.
                       </div>
                     ) : (
                       <div className="divide-y divide-gray-50">
@@ -867,6 +881,7 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
                             onSetPriority={setPriority}
                             onTogglePriorityMenu={setPriorityMenuTopic}
                             tagDraft={tagInputs[topic.id] || ''}
+                            tagSuggestionListId={tagSuggestionListId}
                             onTagDraftChange={(value) => setTagInputs(prev => ({ ...prev, [topic.id]: value }))}
                             onAddTag={addTagToTopic}
                             onRemoveTag={removeTagFromTopic}
@@ -897,6 +912,7 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
           onSetPriority={setPriority}
           onAddTag={addTagToTopic}
           onRemoveTag={removeTagFromTopic}
+          tagSuggestionListId={tagSuggestionListId}
         />
       )}
 
@@ -906,8 +922,8 @@ export function SubjectDetail({ subject, fsrsConfig, onBack, onUpdate }: Subject
           className="rounded-xl p-4 text-white text-center text-sm font-medium"
           style={{ backgroundColor: subject.color }}
         >
-          {stats.studied} de {stats.total} conteúdos estudados | {stats.questionsTotal} questões feitas | {formatPercent(stats.rendimento)} de rendimento
-          {stats.reviewsDue > 0 && ` | \u{1F9E0} ${stats.reviewsDue} revisão(oes) pendente(s)`}
+          {stats.studied} de {stats.total} conteudos estudados | {stats.questionsTotal} questoes feitas | {formatPercent(stats.rendimento)} de rendimento
+          {stats.reviewsDue > 0 && ` | \u{1F9E0} ${stats.reviewsDue} revisoes pendentes`}
         </div>
       )}
     </div>
@@ -937,6 +953,7 @@ interface TopicRowProps {
   onSetPriority: (groupId: string, topicId: string, priority: Priority | null) => void;
   onTogglePriorityMenu: (id: string | null) => void;
   tagDraft: string;
+  tagSuggestionListId: string;
   onTagDraftChange: (value: string) => void;
   onAddTag: (groupId: string, topicId: string, tag: string) => void;
   onRemoveTag: (groupId: string, topicId: string, tag: string) => void;
@@ -949,12 +966,13 @@ function TopicRow({
   onUpdateQuestionProgress,
   onStartEdit, onSaveEdit, onCancelEdit, onSetEditName,
   onSetDeleteConfirm, onSetPriority, onTogglePriorityMenu,
-  tagDraft, onTagDraftChange, onAddTag, onRemoveTag,
+  tagDraft, tagSuggestionListId, onTagDraftChange, onAddTag, onRemoveTag,
 }: TopicRowProps) {
   const isEditing = editingTopicId === topic.id;
   const detailsVisible = isExpanded || isEditing;
   const showPriorityMenu = priorityMenuTopic === topic.id;
   const priorityAnchorRef = useRef<HTMLDivElement | null>(null);
+  const notesRef = useRef<HTMLTextAreaElement | null>(null);
   const [priorityMenuPosition, setPriorityMenuPosition] = useState<'up' | 'down'>('down');
   const reviewStatus = getReviewStatus(topic.fsrsNextReview);
   const isDue = isReviewDue(topic.fsrsNextReview);
@@ -987,6 +1005,34 @@ function TopicRow({
     };
   }, [showPriorityMenu]);
 
+  function insertListPrefix(prefix: string) {
+    const currentNotes = topic.notes ?? '';
+    const textarea = notesRef.current;
+
+    if (!textarea) {
+      const needsBreak = currentNotes.length > 0 && !currentNotes.endsWith('\n');
+      onUpdateTopic(groupId, topic.id, { notes: `${currentNotes}${needsBreak ? '\n' : ''}${prefix}` });
+      return;
+    }
+
+    const start = textarea.selectionStart ?? currentNotes.length;
+    const end = textarea.selectionEnd ?? start;
+    const before = currentNotes.slice(0, start);
+    const after = currentNotes.slice(end);
+    const needsBreak = before.length > 0 && !before.endsWith('\n');
+    const insertion = `${needsBreak ? '\n' : ''}${prefix}`;
+    const nextNotes = `${before}${insertion}${after}`;
+    const nextCaretPos = before.length + insertion.length;
+
+    onUpdateTopic(groupId, topic.id, { notes: nextNotes });
+    requestAnimationFrame(() => {
+      const target = notesRef.current;
+      if (!target) return;
+      target.focus();
+      target.setSelectionRange(nextCaretPos, nextCaretPos);
+    });
+  }
+
   return (
     <div className={`px-4 py-3 transition-all hover:bg-gray-50/50 dark:hover:bg-slate-800/40 ${isDue ? 'border-l-2 border-l-purple-400' : ''}`}>
       <div className="flex items-start gap-3">
@@ -997,7 +1043,7 @@ function TopicRow({
               ? 'bg-slate-600 border-slate-600 text-white'
               : 'border-gray-300 dark:border-slate-600 hover:border-gray-400 dark:hover:border-slate-400'
           }`}
-          title="Abrir painel rápido do assunto"
+          title="Abrir painel rapido do assunto"
         >
           {topic.studied && <Check size={14} />}
         </button>
@@ -1084,132 +1130,187 @@ function TopicRow({
                 )}
               </div>
 
-              {nextReviewDate && (
-                <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium flex items-center gap-1 ${reviewStatus.className}`}>
-                  <Calendar size={10} />
-                  Prox. revisão: {nextReviewDate}
-                </span>
-              )}
             </div>
           )}
 
           {detailsVisible && (
             <>
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mt-2">
-                <div className="flex items-center gap-1.5">
-                  <label className="text-xs text-gray-500">Questões:</label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={topic.questionsTotal || ''}
-                    onChange={e => {
-                      const nextTotal = parseNonNegativeInt(e.target.value);
-                      onUpdateQuestionProgress(groupId, topic.id, nextTotal, Math.min(topic.questionsCorrect, nextTotal));
-                    }}
-                    className="w-14 border border-gray-200 rounded-md px-2 py-1 text-xs text-center focus:outline-none focus:ring-1 bg-white"
-                    style={getRingColorStyle(subjectColor)}
-                    placeholder="0"
-                  />
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <label className="text-xs text-gray-500">Acertos:</label>
-                  <input
-                    type="number"
-                    min="0"
-                    max={topic.questionsTotal}
-                    value={topic.questionsCorrect || ''}
-                    onChange={e => onUpdateQuestionProgress(
-                      groupId,
-                      topic.id,
-                      topic.questionsTotal,
-                      Math.min(parseNonNegativeInt(e.target.value), topic.questionsTotal),
-                    )}
-                    className="w-14 border border-gray-200 rounded-md px-2 py-1 text-xs text-center focus:outline-none focus:ring-1 bg-white"
-                    style={getRingColorStyle(subjectColor)}
-                    placeholder="0"
-                  />
-                </div>
-                {topic.questionsTotal > 0 && (
-                  <span
-                    className={`text-xs font-bold px-2 py-0.5 rounded-full ${
-                      accuracy >= 0.7
-                        ? 'bg-green-100 text-green-700'
-                        : accuracy >= 0.5
-                        ? 'bg-yellow-100 text-yellow-700'
-                        : 'bg-red-100 text-red-700'
-                    }`}
-                  >
-                    {formatPercent(accuracy)}
-                  </span>
+              <div className="mt-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/80 dark:bg-slate-900/40 p-3 space-y-3">
+                {nextReviewDate && (
+                  <div className="rounded-lg border border-slate-200 dark:border-slate-700 bg-white/80 dark:bg-slate-950/60 px-3 py-2 flex items-center justify-between gap-3">
+                    <span className="text-[11px] uppercase tracking-wide text-slate-500 dark:text-slate-400 inline-flex items-center gap-1.5">
+                      <Calendar size={11} />
+                      Prox. revisao
+                    </span>
+                    <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${reviewStatus.className}`}>
+                      {nextReviewDate}
+                    </span>
+                  </div>
                 )}
 
-                <span className="text-gray-200">|</span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+                  <label className="block">
+                    <span className="text-[11px] uppercase tracking-wide text-slate-500 dark:text-slate-400">Questões</span>
+                    <input
+                      type="number"
+                      min="0"
+                      value={topic.questionsTotal || ''}
+                      onChange={e => {
+                        const nextTotal = parseNonNegativeInt(e.target.value);
+                        onUpdateQuestionProgress(groupId, topic.id, nextTotal, Math.min(topic.questionsCorrect, nextTotal));
+                      }}
+                      className="mt-1 w-full border border-gray-200 dark:border-slate-700 rounded-md px-2 py-1.5 text-xs text-center focus:outline-none focus:ring-1 bg-white dark:bg-slate-950"
+                      style={getRingColorStyle(subjectColor)}
+                      placeholder="0"
+                    />
+                  </label>
 
-                <div className="flex items-center gap-1.5">
-                  <Calendar size={12} className="text-gray-400" />
-                  <label className="text-xs text-gray-500">Prazo:</label>
-                  <input
-                    type="date"
-                    value={topic.deadline || ''}
-                    onChange={e => onUpdateTopic(groupId, topic.id, { deadline: e.target.value || null })}
-                    className="border border-gray-200 rounded-md px-2 py-1 text-xs focus:outline-none focus:ring-1 bg-white"
+                  <label className="block">
+                    <span className="text-[11px] uppercase tracking-wide text-slate-500 dark:text-slate-400">Acertos</span>
+                    <input
+                      type="number"
+                      min="0"
+                      max={topic.questionsTotal}
+                      value={topic.questionsCorrect || ''}
+                      onChange={e => onUpdateQuestionProgress(
+                        groupId,
+                        topic.id,
+                        topic.questionsTotal,
+                        Math.min(parseNonNegativeInt(e.target.value), topic.questionsTotal),
+                      )}
+                      className="mt-1 w-full border border-gray-200 dark:border-slate-700 rounded-md px-2 py-1.5 text-xs text-center focus:outline-none focus:ring-1 bg-white dark:bg-slate-950"
+                      style={getRingColorStyle(subjectColor)}
+                      placeholder="0"
+                    />
+                  </label>
+
+                  <div>
+                    <span className="text-[11px] uppercase tracking-wide text-slate-500 dark:text-slate-400">Rendimento</span>
+                    {topic.questionsTotal > 0 ? (
+                      <p
+                        className={`mt-1 text-lg font-extrabold leading-none ${
+                          accuracy >= 0.7
+                            ? 'text-green-600 dark:text-green-400'
+                            : accuracy >= 0.5
+                            ? 'text-amber-600 dark:text-amber-400'
+                            : 'text-red-600 dark:text-red-400'
+                        }`}
+                      >
+                        {formatPercent(accuracy)}
+                      </p>
+                    ) : (
+                      <p className="mt-1 text-xs text-slate-400">Sem dados</p>
+                    )}
+                  </div>
+
+                  <div>
+                    <span className="text-[11px] uppercase tracking-wide text-slate-500 dark:text-slate-400 inline-flex items-center gap-1">
+                      <Calendar size={11} /> Prazo
+                    </span>
+                    <div className="mt-1 flex items-center gap-2">
+                      <input
+                        type="date"
+                        value={topic.deadline || ''}
+                        onChange={e => onUpdateTopic(groupId, topic.id, { deadline: e.target.value || null })}
+                        className="w-full border border-gray-200 dark:border-slate-700 rounded-md px-2 py-1.5 text-xs focus:outline-none focus:ring-1 bg-white dark:bg-slate-950"
+                        style={getRingColorStyle(subjectColor)}
+                      />
+                      <DeadlineBadge deadline={topic.deadline} size="xs" />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="border-t border-slate-200 dark:border-slate-700 pt-3">
+                  <p className="text-[11px] uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-2">Tags</p>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {(topic.tags ?? []).map(tag => (
+                      <button
+                        key={`${topic.id}-tag-${tag}`}
+                        onClick={() => onRemoveTag(groupId, topic.id, tag)}
+                        className="inline-flex items-center gap-1 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 px-2 py-0.5 text-[10px] hover:bg-slate-200 dark:hover:bg-slate-700"
+                        title="Remover tag"
+                      >
+                        #{tag} <X size={10} />
+                      </button>
+                    ))}
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="text"
+                        value={tagDraft}
+                        list={tagSuggestionListId}
+                        onChange={event => onTagDraftChange(event.target.value)}
+                        onKeyDown={event => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault();
+                            onAddTag(groupId, topic.id, tagDraft);
+                          }
+                        }}
+                        placeholder="Nova tag"
+                        className="w-24 border border-gray-200 dark:border-slate-700 rounded-md px-2 py-1 text-[11px] focus:outline-none focus:ring-1 bg-white dark:bg-slate-950"
+                        style={getRingColorStyle(subjectColor)}
+                      />
+                      <button
+                        onClick={() => onAddTag(groupId, topic.id, tagDraft)}
+                        className="px-2 py-1 rounded-md text-[11px] text-white hover:opacity-90"
+                        style={{ backgroundColor: subjectColor }}
+                      >
+                        Tag
+                      </button>
+                    </div>
+                    {COMMON_TAG_PRESETS.map(tag => {
+                      const alreadyAdded = (topic.tags ?? []).some(existing => (
+                        existing.toLocaleLowerCase('pt-BR') === tag.toLocaleLowerCase('pt-BR')
+                      ));
+                      return (
+                        <button
+                          key={`${topic.id}-preset-${tag}`}
+                          onClick={() => onAddTag(groupId, topic.id, tag)}
+                          disabled={alreadyAdded}
+                          className="inline-flex items-center rounded-full border border-slate-200 dark:border-slate-700 px-2 py-0.5 text-[10px] text-slate-500 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          #{tag}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="border-t border-slate-200 dark:border-slate-700 pt-3">
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <label className="text-[11px] uppercase tracking-wide text-slate-500 dark:text-slate-400">Anotações</label>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => insertListPrefix('• ')}
+                        className="px-2 py-1 rounded-md border border-slate-200 dark:border-slate-700 text-[11px] text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+                        title="Inserir item com marcador"
+                      >
+                        • Lista
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => insertListPrefix('1. ')}
+                        className="px-2 py-1 rounded-md border border-slate-200 dark:border-slate-700 text-[11px] text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+                        title="Inserir item numerado"
+                      >
+                        1. Numero
+                      </button>
+                    </div>
+                  </div>
+                  <textarea
+                    ref={notesRef}
+                    value={topic.notes}
+                    onChange={e => onUpdateTopic(groupId, topic.id, { notes: e.target.value })}
+                    placeholder="Escreva observacoes, passos, checklists e resumos..."
+                    className="mt-1 w-full min-h-[96px] border border-gray-200 dark:border-slate-700 rounded-md px-2 py-2 text-xs text-slate-600 dark:text-slate-300 focus:outline-none focus:ring-1 bg-white dark:bg-slate-950 placeholder-slate-400 resize-y"
                     style={getRingColorStyle(subjectColor)}
                   />
                 </div>
-
-                <DeadlineBadge deadline={topic.deadline} size="xs" />
               </div>
-
-              <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                {(topic.tags ?? []).map(tag => (
-                  <button
-                    key={`${topic.id}-tag-${tag}`}
-                    onClick={() => onRemoveTag(groupId, topic.id, tag)}
-                    className="inline-flex items-center gap-1 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 px-2 py-0.5 text-[10px] hover:bg-slate-200 dark:hover:bg-slate-700"
-                    title="Remover tag"
-                  >
-                    #{tag} <X size={10} />
-                  </button>
-                ))}
-                <div className="flex items-center gap-1">
-                  <input
-                    type="text"
-                    value={tagDraft}
-                    onChange={event => onTagDraftChange(event.target.value)}
-                    onKeyDown={event => {
-                      if (event.key === 'Enter') {
-                        event.preventDefault();
-                        onAddTag(groupId, topic.id, tagDraft);
-                      }
-                    }}
-                    placeholder="Nova tag"
-                    className="w-24 border border-gray-200 rounded-md px-2 py-1 text-[11px] focus:outline-none focus:ring-1 bg-white dark:bg-slate-950"
-                    style={getRingColorStyle(subjectColor)}
-                  />
-                  <button
-                    onClick={() => onAddTag(groupId, topic.id, tagDraft)}
-                    className="px-2 py-1 rounded-md text-[11px] text-white hover:opacity-90"
-                    style={{ backgroundColor: subjectColor }}
-                  >
-                    Tag
-                  </button>
-                </div>
-              </div>
-
-              <div className="mt-2">
-                <input
-                  type="text"
-                  value={topic.notes}
-                  onChange={e => onUpdateTopic(groupId, topic.id, { notes: e.target.value })}
-                  placeholder="\u{1F4DD} Anotacoes..."
-                  className="w-full border-0 border-b border-gray-200 text-xs text-gray-500 py-1 focus:outline-none focus:border-gray-400 bg-transparent placeholder-gray-300"
-                />
-              </div>
-
-              <div className="mt-2 flex items-center justify-between gap-2">
+              <div className="mt-3 flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 text-[11px] text-gray-500">
                   <Brain size={12} className="text-purple-500" />
-                  <span>{topic.reviewHistory.length > 0 ? `Rev. ${topic.reviewHistory.length} - ${reviewStatus.text}` : 'Sem revisões FSRS ainda'}</span>
+                  <span>{topic.reviewHistory.length > 0 ? `Rev. ${topic.reviewHistory.length} - ${reviewStatus.text}` : 'Sem revisoes FSRS ainda'}</span>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
                   <button
@@ -1256,6 +1357,7 @@ interface TopicStudyModalProps {
   onSetPriority: (groupId: string, topicId: string, priority: Priority | null) => void;
   onAddTag: (groupId: string, topicId: string, tag: string) => void;
   onRemoveTag: (groupId: string, topicId: string, tag: string) => void;
+  tagSuggestionListId: string;
 }
 
 function TopicStudyModal({
@@ -1271,6 +1373,7 @@ function TopicStudyModal({
   onSetPriority,
   onAddTag,
   onRemoveTag,
+  tagSuggestionListId,
 }: TopicStudyModalProps) {
   const [autoMode, setAutoMode] = useState(true);
   const [tagInput, setTagInput] = useState('');
@@ -1302,7 +1405,7 @@ function TopicStudyModal({
         <div className="px-5 py-4 border-b border-gray-100 flex items-start justify-between gap-3">
           <div>
             <h3 className="text-lg font-bold text-gray-800">{topic.name}</h3>
-            <p className="text-xs text-gray-500 mt-0.5">Painel rápido para estudo, desempenho e revisão FSRS.</p>
+            <p className="text-xs text-gray-500 mt-0.5">Painel rapido para estudo, desempenho e revisao FSRS.</p>
           </div>
           <button
             onClick={onClose}
@@ -1361,6 +1464,7 @@ function TopicStudyModal({
               <input
                 type="text"
                 value={tagInput}
+                list={tagSuggestionListId}
                 onChange={event => setTagInput(event.target.value)}
                 onKeyDown={event => {
                   if (event.key === 'Enter') {
@@ -1383,12 +1487,27 @@ function TopicStudyModal({
               >
                 Adicionar
               </button>
+              {COMMON_TAG_PRESETS.map(tag => {
+                const alreadyAdded = (topic.tags ?? []).some(existing => (
+                  existing.toLocaleLowerCase('pt-BR') === tag.toLocaleLowerCase('pt-BR')
+                ));
+                return (
+                  <button
+                    key={`modal-preset-${topic.id}-${tag}`}
+                    onClick={() => onAddTag(groupId, topic.id, tag)}
+                    disabled={alreadyAdded}
+                    className="inline-flex items-center rounded-full border border-slate-200 px-2 py-0.5 text-[11px] text-slate-500 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    #{tag}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
             <div>
-              <label className="text-xs uppercase tracking-wide text-gray-400">Questões</label>
+              <label className="text-xs uppercase tracking-wide text-gray-400">Questoes</label>
               <input
                 type="number"
                 min="0"
@@ -1456,7 +1575,7 @@ function TopicStudyModal({
               </span>
             )}
             <span className={`px-2 py-0.5 rounded-full font-medium ${reviewStatus.className}`}>
-              {topic.fsrsNextReview ? `Prox. revisão: ${new Date(topic.fsrsNextReview + 'T00:00:00').toLocaleDateString('pt-BR')}` : 'Sem revisão agendada'}
+              {topic.fsrsNextReview ? `Prox. revisao: ${new Date(topic.fsrsNextReview + 'T00:00:00').toLocaleDateString('pt-BR')}` : 'Sem revisao agendada'}
             </span>
             <span className="px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 font-medium">
               {FSRS_VERSION_LABEL[normalizedConfig.version]}
@@ -1466,7 +1585,7 @@ function TopicStudyModal({
           <div className="rounded-xl border border-purple-200 bg-purple-50 p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
-                <h4 className="text-sm font-bold text-purple-800">Sistema de revisão FSRS</h4>
+                <h4 className="text-sm font-bold text-purple-800">Sistema de revisao FSRS</h4>
                 <p className="text-xs text-purple-600">Use Auto para sugerir dificuldade com base no seu desempenho.</p>
               </div>
               <button
@@ -1485,7 +1604,7 @@ function TopicStudyModal({
                 {suggestedOption ? (
                   <>
                     <p className="text-xs text-purple-700 bg-purple-100 rounded-lg px-3 py-2">
-                      Sugestão automática: {suggestedOption.emoji} {suggestedOption.label}
+                      Sugestao automatica: {suggestedOption.emoji} {suggestedOption.label}
                       {accuracy !== null && ` (${formatPercent(accuracy)} de acerto)`}
                       {suggestedDeadline && ` | Prazo sugerido: ${new Date(suggestedDeadline + 'T00:00:00').toLocaleDateString('pt-BR')}`}
                     </p>
@@ -1499,13 +1618,13 @@ function TopicStudyModal({
                   </>
                 ) : (
                   <p className="text-xs text-purple-700 bg-purple-100 rounded-lg px-3 py-2">
-                    Para usar Auto, informe quantidade de questões e acertos.
+                    Para usar Auto, informe quantidade de questoes e acertos.
                   </p>
                 )}
               </div>
             ) : (
               <div className="mt-3">
-                <p className="text-xs text-purple-700 mb-2">Modo manual: escolha a avaliação da revisão.</p>
+                <p className="text-xs text-purple-700 mb-2">Modo manual: escolha a avaliacao da revisao.</p>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                   {RATING_OPTIONS.map(option => {
                     const nextDate = previewNextReviewDate(option.value);

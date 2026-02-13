@@ -463,7 +463,7 @@ export function ReviewSystem({
     const parsed = parseWeightsInput(weightsDraft);
     const expected = getExpectedWeightCount(normalized.version);
     if (parsed.length !== expected) {
-      setWeightsError(`A versÃ£o ${FSRS_VERSION_LABEL[normalized.version]} exige ${expected} pesos.`);
+      setWeightsError(`A versão ${FSRS_VERSION_LABEL[normalized.version]} exige ${expected} pesos.`);
       return;
     }
 
@@ -498,10 +498,10 @@ export function ReviewSystem({
         <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHZpZXdCb3g9IjAgMCA2MCA2MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiPjxnIGZpbGw9IiNmZmYiIGZpbGwtb3BhY2l0eT0iMC4wNSI+PHBhdGggZD0iTTM2IDE4YzEuNjU3IDAgMy0xLjM0MyAzLTNzLTEuMzQzLTMtMy0zLTMgMS4zNDMtMyAzIDEuMzQzIDMgMyAzem0wIDMwYzEuNjU3IDAgMy0xLjM0MyAzLTNzLTEuMzQzLTMtMy0zLTMgMS4zNDMtMyAzIDEuMzQzIDMgMyAzem0tMTgtMTVjMS42NTcgMCAzLTEuMzQzIDMtM3MtMS4zNDMtMy0zLTMtMyAxLjM0My0zIDMgMS4zNDMgMyAzIDN6Ii8+PC9nPjwvZz48L3N2Zz4=')] opacity-50" />
         <div className="relative">
           <h1 className="text-2xl md:text-3xl font-bold text-center flex items-center justify-center gap-3">
-            <Brain size={32} /> Sistema de RevisÃ£o Espacada (FSRS)
+            <Brain size={32} /> Sistema de Revisão Espacada (FSRS)
           </h1>
           <p className="text-center text-purple-200 mt-1 text-sm italic">
-            Algoritmo {FSRS_VERSION_LABEL[currentFsrsConfig.version]} - Otimize sua retenÃ§Ã£o com revisÃµes inteligentes
+            Algoritmo {FSRS_VERSION_LABEL[currentFsrsConfig.version]} - Otimize sua retenção com revisões inteligentes
           </p>
         </div>
       </div>
@@ -509,7 +509,7 @@ export function ReviewSystem({
       {/* FSRS Config */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 space-y-4">
         <div className="flex flex-wrap gap-2 items-center">
-          <span className="text-sm font-semibold text-gray-700">VersÃ£o do algoritmo:</span>
+          <span className="text-sm font-semibold text-gray-700">Versão do algoritmo:</span>
           {(['fsrs5', 'fsrs6'] as FSRSVersion[]).map(version => (
             <button
               key={version}
@@ -525,14 +525,14 @@ export function ReviewSystem({
           ))}
           <span className="text-xs text-gray-500">
             {currentFsrsConfig.version === 'fsrs6'
-              ? 'Modo recente, com curva de esquecimento treinÃ¡vel.'
-              : 'Modo estÃ¡vel e amplamente validado.'}
+              ? 'Modo recente, com curva de esquecimento treinável.'
+              : 'Modo estável e amplamente validado.'}
           </span>
         </div>
 
         <div className="flex flex-wrap gap-3 items-end">
           <div>
-            <label className="text-xs font-medium text-gray-500 block mb-1">RetenÃ§Ã£o alvo (0.01-0.999)</label>
+            <label className="text-xs font-medium text-gray-500 block mb-1">Retenção alvo (0.01-0.999)</label>
             <input
               type="number"
               min="0.01"
@@ -544,13 +544,13 @@ export function ReviewSystem({
             />
           </div>
           <div className="text-xs text-gray-500 pb-2">
-            Equivale a <strong>{retentionPercent}%</strong> de retenÃ§Ã£o esperada.
+            Equivale a <strong>{retentionPercent}%</strong> de retenção esperada.
           </div>
         </div>
 
         <div className="space-y-2">
           <label className="text-xs font-medium text-gray-500 block">
-            Pesos treinados (opcional, separados por vÃ­rgula ou espaÃ§o)
+            Pesos treinados (opcional, separados por vírgula ou espaço)
           </label>
           <textarea
             value={weightsDraft}
@@ -569,7 +569,7 @@ export function ReviewSystem({
               onClick={useDefaultWeights}
               className="px-3 py-1.5 rounded-lg text-xs font-medium bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
             >
-              Usar pesos padrÃ£o
+              Usar pesos padrão
             </button>
             <span className="text-[11px] text-gray-500">
               Esperado: {getExpectedWeightCount(currentFsrsConfig.version)} valores para {FSRS_VERSION_LABEL[currentFsrsConfig.version]}.
@@ -587,7 +587,7 @@ export function ReviewSystem({
       {/* Stats Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 text-center">
-          <p className="text-xs text-gray-500 font-medium mb-1">Com RevisÃµes</p>
+          <p className="text-xs text-gray-500 font-medium mb-1">Com Revisões</p>
           <p className="text-2xl font-bold text-purple-700">{totalWithReviews}</p>
         </div>
         <div className={`rounded-xl shadow-sm border p-4 text-center ${totalDue > 0 ? 'bg-red-50 border-red-200' : 'bg-white border-gray-100'}`}>
@@ -599,7 +599,7 @@ export function ReviewSystem({
           <p className="text-2xl font-bold text-blue-600">{totalUpcoming}</p>
         </div>
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 text-center">
-          <p className="text-xs text-gray-500 font-medium mb-1">RetenÃ§Ã£o Alvo</p>
+          <p className="text-xs text-gray-500 font-medium mb-1">Retenção Alvo</p>
           <p className="text-2xl font-bold text-green-600">{retentionPercent}%</p>
         </div>
       </div>
@@ -607,7 +607,7 @@ export function ReviewSystem({
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-sm font-semibold text-gray-700 inline-flex items-center gap-2">
-            <Filter size={15} /> Filtros avanÃ§ados de revisÃ£o
+            <Filter size={15} /> Filtros avançados de revisão
           </h2>
           {hasAdvancedFilters && (
             <button
@@ -652,7 +652,7 @@ export function ReviewSystem({
           >
             <option value="all">Todas prioridades</option>
             <option value="alta">Alta</option>
-            <option value="media">MÃ©dia</option>
+            <option value="media">Média</option>
             <option value="baixa">Baixa</option>
             <option value="none">Sem prioridade</option>
           </select>
@@ -680,9 +680,9 @@ export function ReviewSystem({
             onChange={event => setUpcomingRangeDays(Number(event.target.value) as 7 | 30 | 3650)}
             className="shrink-0 min-w-[150px] rounded-lg border border-gray-200 px-2 py-1.5 text-xs bg-white"
           >
-            <option value={7}>PrÃ³ximas: 7d</option>
-            <option value={30}>PrÃ³ximas: 30d</option>
-            <option value={3650}>PrÃ³ximas: todas</option>
+            <option value={7}>Próximas: 7d</option>
+            <option value={30}>Próximas: 30d</option>
+            <option value={3650}>Próximas: todas</option>
           </select>
         </div>
       </div>
@@ -693,7 +693,7 @@ export function ReviewSystem({
           <div className="px-5 py-3 bg-red-50 border-b border-red-200 flex items-center gap-2">
             <AlertTriangle size={18} className="text-red-500" />
             <h2 className="font-bold text-red-700 text-lg">
-              RevisÃµes Pendentes ({totalDue})
+              Revisões Pendentes ({totalDue})
             </h2>
           </div>
           <div className="divide-y divide-gray-100">
@@ -736,7 +736,7 @@ export function ReviewSystem({
                       <p className="text-xs text-gray-500 mt-0.5">
                         {item.subjectName}{' -> '}{item.groupName}
                         {item.topic.reviewHistory.length > 0 && (
-                          <span className="ml-2">- RevisÃ£o #{item.topic.reviewHistory.length + 1}</span>
+                          <span className="ml-2">- Revisão #{item.topic.reviewHistory.length + 1}</span>
                         )}
                       </p>
 
@@ -745,7 +745,7 @@ export function ReviewSystem({
                         {item.topic.questionsTotal > 0 && (
                           <span className="flex items-center gap-1">
                             <BarChart3 size={12} />
-                            {item.topic.questionsCorrect}/{item.topic.questionsTotal} questÃµes
+                            {item.topic.questionsCorrect}/{item.topic.questionsTotal} questões
                             ({formatPercent(item.topic.questionsCorrect / item.topic.questionsTotal)})
                           </span>
                         )}
@@ -764,7 +764,7 @@ export function ReviewSystem({
                         {currentRetrievability !== null && (
                           <span className="flex items-center gap-1">
                             <Brain size={12} />
-                            RetenÃ§Ã£o estimada: {formatPercent(currentRetrievability)}
+                            Retenção estimada: {formatPercent(currentRetrievability)}
                           </span>
                         )}
                       </div>
@@ -792,11 +792,11 @@ export function ReviewSystem({
                     <div className="mt-4 bg-purple-50 rounded-xl p-4 border border-purple-200">
                       <p className="text-sm font-medium text-purple-800 mb-3 flex items-center gap-2">
                         <RotateCcw size={16} />
-                        Como foi a revisÃ£o deste assunto?
+                        Como foi a revisão deste assunto?
                       </p>
                       {suggestedRating && (
                         <p className="text-xs text-purple-600 mb-3 bg-purple-100 px-3 py-1.5 rounded-lg">
-                          SugestÃ£o baseada no desempenho ({formatPercent(item.topic.questionsCorrect / item.topic.questionsTotal)}):
+                          Sugestão baseada no desempenho ({formatPercent(item.topic.questionsCorrect / item.topic.questionsTotal)}):
                           <strong className="ml-1">{RATING_OPTIONS.find(r => r.value === suggestedRating)?.emoji} {RATING_OPTIONS.find(r => r.value === suggestedRating)?.label}</strong>
                         </p>
                       )}
@@ -829,7 +829,7 @@ export function ReviewSystem({
                       >
                         {historyExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                         <History size={14} />
-                        HistÃ³rico ({item.topic.reviewHistory.length} revisÃµes)
+                        Histórico ({item.topic.reviewHistory.length} revisões)
                       </button>
                       {historyExpanded && (
                         <ReviewHistoryTimeline reviews={item.topic.reviewHistory} />
@@ -848,12 +848,12 @@ export function ReviewSystem({
         <div className="bg-green-50 border border-green-200 rounded-xl p-6 text-center">
           <div className="text-4xl mb-2">OK</div>
           <p className="font-bold text-green-700 text-lg">
-            {hasAdvancedFilters ? 'Nenhuma revisÃ£o encontrada com os filtros atuais.' : 'Nenhuma revisÃ£o pendente!'}
+            {hasAdvancedFilters ? 'Nenhuma revisão encontrada com os filtros atuais.' : 'Nenhuma revisão pendente!'}
           </p>
           <p className="text-green-600 text-sm mt-1">
             {hasAdvancedFilters
               ? 'Ajuste os filtros para ampliar os resultados.'
-              : 'Todas as revisÃµes estÃ£o em dia. Continue estudando e marcando assuntos para revisÃ£o.'}
+              : 'Todas as revisões estão em dia. Continue estudando e marcando assuntos para revisão.'}
           </p>
         </div>
       )}
@@ -864,14 +864,14 @@ export function ReviewSystem({
           <div className="px-5 py-3 bg-blue-50 border-b border-blue-200 flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <Calendar size={18} className="text-blue-600" />
-              <h2 className="font-bold text-blue-700">PrÃ³ximas RevisÃµes</h2>
+              <h2 className="font-bold text-blue-700">Próximas Revisões</h2>
             </div>
             <div className="flex items-center gap-2 text-xs text-blue-700">
               <span>Mostrar:</span>
               <select
                 value={upcomingVisibleCount}
                 onChange={event => setUpcomingVisibleCount(Number(event.target.value) as VisibleCount)}
-                aria-label="Quantidade de prÃ³ximas revisÃµes"
+                aria-label="Quantidade de próximas revisões"
                 className="rounded-md border border-blue-200 bg-white px-2 py-1 text-xs"
               >
                 {VISIBLE_COUNT_OPTIONS.map(option => (
@@ -899,7 +899,7 @@ export function ReviewSystem({
                     </p>
                   </div>
                   <span className={`text-xs px-2.5 py-1 rounded-full font-medium shrink-0 ${status.className}`}>
-                    {days !== null && days === 1 ? 'AmanhÃ£' : status.text}
+                    {days !== null && days === 1 ? 'Amanhã' : status.text}
                   </span>
                   <ArrowRight size={14} className="text-gray-300 shrink-0" />
                 </div>
@@ -914,7 +914,7 @@ export function ReviewSystem({
         <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <TrendingUp size={18} className="text-gray-600" />
-            <h2 className="font-bold text-gray-700">Assuntos com RevisÃ£o Ativa</h2>
+            <h2 className="font-bold text-gray-700">Assuntos com Revisão Ativa</h2>
           </div>
           <div className="flex items-center gap-2 text-xs text-gray-600">
             <span>Mostrar:</span>
@@ -933,9 +933,9 @@ export function ReviewSystem({
         {totalWithReviews === 0 ? (
           <div className="p-8 text-center">
             <Brain size={48} className="mx-auto text-gray-300 mb-3" />
-            <p className="text-gray-500 font-medium mb-1">Nenhum assunto com revisÃ£o ativa</p>
+            <p className="text-gray-500 font-medium mb-1">Nenhum assunto com revisão ativa</p>
             <p className="text-gray-400 text-sm">
-              Para iniciar, vÃ¡ a uma disciplina, marque um assunto como estudado e clique em "Iniciar RevisÃ£o FSRS".
+              Para iniciar, vá a uma disciplina, marque um assunto como estudado e clique em "Iniciar Revisão FSRS".
             </p>
           </div>
         ) : (
@@ -960,7 +960,7 @@ export function ReviewSystem({
                       <div className="flex flex-wrap gap-2 mt-1 text-xs text-gray-500">
                         <span>{item.subjectName}</span>
                         <span>-</span>
-                        <span>RevisÃµes: {item.topic.reviewHistory.length}</span>
+                        <span>Revisões: {item.topic.reviewHistory.length}</span>
                         <span>-</span>
                         <span className={diffLabel.color}>Dif: {item.topic.fsrsDifficulty.toFixed(1)}</span>
                         <span>-</span>
@@ -991,7 +991,7 @@ export function ReviewSystem({
                     >
                       {historyExpanded2 ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                       <History size={14} />
-                      Ver histÃ³rico
+                      Ver histórico
                     </button>
                   )}
                   {historyExpanded2 && (
@@ -1012,17 +1012,17 @@ export function ReviewSystem({
         </h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-purple-700">
           <div className="space-y-2">
-            <p><strong>Esqueci (1):</strong> Estabilidade cai drasticamente, revisÃ£o em breve</p>
-            <p><strong>DifÃ­cil (2):</strong> Intervalo cresce pouco, dificuldade aumenta</p>
+            <p><strong>Esqueci (1):</strong> Estabilidade cai drasticamente, revisão em breve</p>
+            <p><strong>Difícil (2):</strong> Intervalo cresce pouco, dificuldade aumenta</p>
           </div>
           <div className="space-y-2">
             <p><strong>Bom (3):</strong> Crescimento normal do intervalo</p>
-            <p><strong>FÃ¡cil (4):</strong> Intervalo cresce bastante, revisÃ£o mais distante</p>
+            <p><strong>Fácil (4):</strong> Intervalo cresce bastante, revisão mais distante</p>
           </div>
         </div>
         <div className="mt-3 text-xs text-purple-600 bg-purple-100 rounded-lg p-3">
-          O sistema sugere automaticamente uma avaliaÃ§Ã£o baseada no seu desempenho em questÃµes.
-          Cada revisÃ£o cria um novo bloco no histÃ³rico, permitindo acompanhar a evoluÃ§Ã£o ao longo do tempo.
+          O sistema sugere automaticamente uma avaliação baseada no seu desempenho em questões.
+          Cada revisão cria um novo bloco no histórico, permitindo acompanhar a evolução ao longo do tempo.
         </div>
       </div>
 
@@ -1129,7 +1129,7 @@ const ReviewHistoryTimeline = memo(function ReviewHistoryTimeline({ reviews }: {
           <div key={rev.id} className={`rounded-lg p-3 border ${ratingOpt?.borderColor || 'border-gray-200'} ${ratingOpt?.lightBg || 'bg-gray-50'}`}>
             <div className="flex items-center gap-2 flex-wrap">
               <span className={`text-xs px-2 py-0.5 rounded-full text-white font-medium ${ratingOpt?.color || 'bg-gray-500'}`}>
-                RevisÃ£o #{rev.reviewNumber}
+                Revisão #{rev.reviewNumber}
               </span>
               <span className="text-xs text-gray-500">{formatDate(rev.date)}</span>
               <span className="text-sm">{ratingOpt?.emoji}</span>
@@ -1147,7 +1147,7 @@ const ReviewHistoryTimeline = memo(function ReviewHistoryTimeline({ reviews }: {
               </span>
               {rev.retrievability !== null && (
                 <span>
-                  RetenÃ§Ã£o: <strong>{formatPercent(rev.retrievability)}</strong>
+                  Retenção: <strong>{formatPercent(rev.retrievability)}</strong>
                 </span>
               )}
               {rev.performanceScore !== null && (
@@ -1234,7 +1234,7 @@ export function TopicReviewWidget({
             onClick={() => setShowRating(true)}
             className="text-xs px-2.5 py-1 rounded-full bg-purple-100 text-purple-700 hover:bg-purple-200 transition-colors font-medium"
           >
-            Iniciar RevisÃ£o
+            Iniciar Revisão
           </button>
         )}
 
@@ -1276,11 +1276,11 @@ export function TopicReviewWidget({
       {showRating && (
         <div className="mt-2 bg-purple-50 rounded-lg p-3 border border-purple-200">
           <p className="text-xs text-purple-700 font-medium mb-2">
-            {hasReviews ? `RevisÃ£o #${topic.reviewHistory.length + 1}` : 'Primeira revisÃ£o'} - Como foi?
+            {hasReviews ? `Revisão #${topic.reviewHistory.length + 1}` : 'Primeira revisão'} - Como foi?
           </p>
           {suggestedRating && topic.questionsTotal > 0 && (
             <p className="text-[10px] text-purple-600 mb-2 bg-purple-100 px-2 py-1 rounded">
-              SugestÃ£o: {RATING_OPTIONS.find(r => r.value === suggestedRating)?.emoji} {RATING_OPTIONS.find(r => r.value === suggestedRating)?.label}
+              Sugestão: {RATING_OPTIONS.find(r => r.value === suggestedRating)?.emoji} {RATING_OPTIONS.find(r => r.value === suggestedRating)?.label}
               {' '}(baseado em {formatPercent(topic.questionsCorrect / topic.questionsTotal)} de acerto)
             </p>
           )}
@@ -1316,7 +1316,7 @@ export function TopicReviewWidget({
           >
             {showHistory ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
             <History size={12} />
-            HistÃ³rico ({topic.reviewHistory.length} revisÃµes)
+            Histórico ({topic.reviewHistory.length} revisões)
           </button>
           {showHistory && (
             <div className="mt-1">
@@ -1329,6 +1329,7 @@ export function TopicReviewWidget({
     </div>
   );
 }
+
 
 
 
