@@ -1,14 +1,10 @@
-import { useState, useCallback, useEffect, useMemo, useRef, type ChangeEvent, type FormEvent, type MouseEvent as ReactMouseEvent } from 'react';
+import { lazy, Suspense, useState, useCallback, useEffect, useMemo, useRef, type ChangeEvent, type FormEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import { loadData, saveData, getSubjectStats, getAllTopics, getDeadlineInfo, getReviewsDue, generateId, normalizeStudyData } from './store';
-import { StudyData, Subject, WeeklySchedule, EssayMonitorSettings, StudyGoals } from './types';
+import { StudyData, Subject, WeeklySchedule, EssayMonitorSettings, PracticeTestsSettings, StudyGoals } from './types';
 import { type FSRSConfig, normalizeFSRSConfig } from './fsrs';
-import { Overview } from './components/Overview';
-import { SubjectDetail } from './components/SubjectDetail';
-import { ReviewSystem } from './components/ReviewSystem';
-import { EssayMonitor } from './components/EssayMonitor';
-import { BookOpen, LayoutDashboard, Brain, Moon, Plus, Pencil, Search, Sun, Trash2, Undo2, X, FileText, Download, Upload } from 'lucide-react';
+import { BookOpen, LayoutDashboard, Brain, Moon, Plus, Pencil, Search, Sun, Trash2, Undo2, X, FileText, Download, Upload, Layers, ClipboardList } from 'lucide-react';
 
-type View = 'overview' | 'subject' | 'reviews' | 'essays';
+type View = 'overview' | 'subject' | 'reviews' | 'essays' | 'blocks' | 'practiceTests';
 
 const SUBJECT_COLOR_PALETTE = [
   '#1565c0', '#2e7d32', '#e65100', '#6a1b9a',
@@ -26,6 +22,27 @@ const BACKUP_SCHEMA_VERSION = 'study-data-v1';
 const BACKUP_FILE_KIND = 'enem2025-backup';
 const BACKUP_FILE_VERSION = 2;
 const MAX_BACKUPS = 20;
+const SAVE_DEBOUNCE_MS = 450;
+const SEARCH_DEBOUNCE_MS = 140;
+
+const Overview = lazy(() =>
+  import('./components/Overview').then(module => ({ default: module.Overview })),
+);
+const SubjectDetail = lazy(() =>
+  import('./components/SubjectDetail').then(module => ({ default: module.SubjectDetail })),
+);
+const ReviewSystem = lazy(() =>
+  import('./components/ReviewSystem').then(module => ({ default: module.ReviewSystem })),
+);
+const EssayMonitor = lazy(() =>
+  import('./components/EssayMonitor').then(module => ({ default: module.EssayMonitor })),
+);
+const BlockManager = lazy(() =>
+  import('./components/BlockManager').then(module => ({ default: module.BlockManager })),
+);
+const PracticeTests = lazy(() =>
+  import('./components/PracticeTests').then(module => ({ default: module.PracticeTests })),
+);
 
 interface BackupEntry {
   id: string;
@@ -40,6 +57,8 @@ interface UndoEntry {
   label: string;
   snapshot: StudyData;
   createdAt: string;
+  createdAtMs: number;
+  coalesceKey?: string;
 }
 
 interface ConfirmDialogState {
@@ -92,6 +111,21 @@ function isValidHexColor(value: string): boolean {
   return /^#[0-9a-f]{6}$/i.test(value);
 }
 
+function toDateOnlyLocal(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function ViewLoadingFallback() {
+  return (
+    <div className="m-3 rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-600 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+      Carregando tela...
+    </div>
+  );
+}
+
 interface SubjectContextMenuState {
   subjectId: string;
   x: number;
@@ -99,6 +133,9 @@ interface SubjectContextMenuState {
 }
 
 function cloneStudyData(data: StudyData): StudyData {
+  if (typeof structuredClone === 'function') {
+    return structuredClone(data);
+  }
   return JSON.parse(JSON.stringify(data)) as StudyData;
 }
 
@@ -161,7 +198,9 @@ export function App() {
   const [backups, setBackups] = useState<BackupEntry[]>(() => loadBackups());
   const [selectedBackupId, setSelectedBackupId] = useState<string>('');
   const [globalSearchQuery, setGlobalSearchQuery] = useState('');
+  const [debouncedGlobalSearchQuery, setDebouncedGlobalSearchQuery] = useState('');
   const [globalSearchType, setGlobalSearchType] = useState<'all' | 'subject' | 'topic' | 'tag'>('all');
+  const [focusTopic, setFocusTopic] = useState<{ subjectId: string; topicId: string } | null>(null);
 
   const [subjectContextMenu, setSubjectContextMenu] = useState<SubjectContextMenuState | null>(null);
   const [isCreateSubjectOpen, setIsCreateSubjectOpen] = useState(false);
@@ -179,19 +218,39 @@ export function App() {
     ]);
   }
 
-  function applyDataChange(label: string, updater: (prev: StudyData) => StudyData) {
+  function applyDataChange(
+    label: string,
+    updater: (prev: StudyData) => StudyData,
+    options?: { coalesceKey?: string; coalesceWindowMs?: number },
+  ) {
     setData(prev => {
       const next = updater(prev);
       if (next === prev) return prev;
-      setUndoStack(stack => [
-        ...stack.slice(-29),
-        {
-          id: `undo_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-          label,
-          snapshot: cloneStudyData(prev),
-          createdAt: new Date().toISOString(),
-        },
-      ]);
+      setUndoStack(stack => {
+        const now = Date.now();
+        const last = stack[stack.length - 1];
+        const coalesceKey = options?.coalesceKey;
+        const coalesceWindowMs = options?.coalesceWindowMs ?? 1200;
+        const canCoalesce =
+          !!coalesceKey &&
+          !!last &&
+          last.coalesceKey === coalesceKey &&
+          now - last.createdAtMs <= coalesceWindowMs;
+
+        if (canCoalesce) return stack;
+
+        return [
+          ...stack.slice(-29),
+          {
+            id: `undo_${now}_${Math.random().toString(36).slice(2, 8)}`,
+            label,
+            snapshot: cloneStudyData(prev),
+            createdAt: new Date(now).toISOString(),
+            createdAtMs: now,
+            coalesceKey,
+          },
+        ];
+      });
       return { ...next, lastUpdated: new Date().toISOString() };
     });
   }
@@ -242,8 +301,18 @@ export function App() {
   }
 
   useEffect(() => {
-    saveData(data);
+    const timer = window.setTimeout(() => {
+      saveData(data);
+    }, SAVE_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
   }, [data]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedGlobalSearchQuery(globalSearchQuery);
+    }, SEARCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [globalSearchQuery]);
 
   useEffect(() => {
     if (toasts.length === 0) return;
@@ -310,7 +379,10 @@ export function App() {
       applyDataChange('Atualização de disciplina', prev => ({
         ...prev,
         subjects: prev.subjects.map(s => (s.id === updated.id ? updated : s)),
-      }));
+      }), {
+        coalesceKey: `subject:${updated.id}`,
+        coalesceWindowMs: 1200,
+      });
     },
     []
   );
@@ -345,6 +417,16 @@ export function App() {
     }));
   }, []);
 
+  const updatePracticeTests = useCallback((nextPracticeTests: PracticeTestsSettings) => {
+    applyDataChange('Simulados', prev => ({
+      ...prev,
+      settings: {
+        ...prev.settings,
+        practiceTests: nextPracticeTests,
+      },
+    }));
+  }, []);
+
   const updateGoals = useCallback((nextGoals: StudyGoals) => {
     applyDataChange('Atualização de metas', prev => ({
       ...prev,
@@ -356,6 +438,14 @@ export function App() {
   }, []);
 
   const selectedSubject = data.subjects.find(s => s.id === selectedSubjectId) || null;
+  const totalBlocksCount = useMemo(
+    () => data.subjects.reduce((sum, subject) => sum + subject.blocks.length, 0),
+    [data.subjects],
+  );
+  const totalPracticeTestsCount = useMemo(
+    () => data.settings.practiceTests.tests.length,
+    [data.settings.practiceTests.tests.length],
+  );
   const globalTagSuggestions = useMemo(() => {
     const unique = new Set<string>();
     for (const subject of data.subjects) {
@@ -372,7 +462,7 @@ export function App() {
     ? data.subjects.find(s => s.id === subjectContextMenu.subjectId) || null
     : null;
   const globalSearchResults = useMemo(() => {
-    const rawQuery = globalSearchQuery.trim().toLocaleLowerCase('pt-BR');
+    const rawQuery = debouncedGlobalSearchQuery.trim().toLocaleLowerCase('pt-BR');
     if (rawQuery.length < 2) return [] as SearchResultItem[];
     const tokens = rawQuery.split(/\s+/).filter(Boolean);
     const tagOnlyQuery = rawQuery.startsWith('#') ? rawQuery.slice(1).trim() : '';
@@ -456,14 +546,42 @@ export function App() {
     return results
       .sort((a, b) => b.score - a.score)
       .slice(0, 40);
-  }, [data.subjects, globalSearchQuery, globalSearchType]);
+  }, [data.subjects, debouncedGlobalSearchQuery, globalSearchType]);
 
-  function navigateToSubject(id: string, _topicId?: string) {
+  const sidebarSubjects = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return data.subjects.map(subject => {
+      const stats = getSubjectStats(subject);
+      const allTopics_ = getAllTopics(subject);
+      const overdueCount = allTopics_.filter(t => {
+        if (!t.deadline || t.studied) return false;
+        const info = getDeadlineInfo(t.deadline);
+        return info?.urgency === 'overdue';
+      }).length;
+      const highPrioCount = allTopics_.filter(t => !t.studied && t.priority === 'alta').length;
+      const reviewsDue = allTopics_.filter(t => {
+        if (!t.fsrsNextReview) return false;
+        return new Date(t.fsrsNextReview + 'T00:00:00') <= today;
+      }).length;
+      return {
+        subject,
+        stats,
+        overdueCount,
+        highPrioCount,
+        reviewsDue,
+      };
+    });
+  }, [data.subjects]);
+
+  function navigateToSubject(id: string, topicId?: string) {
     setSelectedSubjectId(id);
     setView('subject');
     setSidebarOpen(false);
     setSubjectContextMenu(null);
     setGlobalSearchQuery('');
+    setDebouncedGlobalSearchQuery('');
+    setFocusTopic(topicId ? { subjectId: id, topicId } : null);
   }
 
   function navigateToOverview() {
@@ -471,6 +589,7 @@ export function App() {
     setView('overview');
     setSidebarOpen(false);
     setSubjectContextMenu(null);
+    setFocusTopic(null);
   }
 
   function navigateToReviews() {
@@ -478,6 +597,7 @@ export function App() {
     setSelectedSubjectId(null);
     setSidebarOpen(false);
     setSubjectContextMenu(null);
+    setFocusTopic(null);
   }
 
   function navigateToEssays() {
@@ -485,6 +605,23 @@ export function App() {
     setSelectedSubjectId(null);
     setSidebarOpen(false);
     setSubjectContextMenu(null);
+    setFocusTopic(null);
+  }
+
+  function navigateToBlocks() {
+    setView('blocks');
+    setSelectedSubjectId(null);
+    setSidebarOpen(false);
+    setSubjectContextMenu(null);
+    setFocusTopic(null);
+  }
+
+  function navigateToPracticeTests() {
+    setView('practiceTests');
+    setSelectedSubjectId(null);
+    setSidebarOpen(false);
+    setSubjectContextMenu(null);
+    setFocusTopic(null);
   }
 
   function toggleTheme() {
@@ -524,7 +661,9 @@ export function App() {
       emoji: finalEmoji,
       color: finalColor,
       colorLight: toColorLight(finalColor),
+      description: '',
       topicGroups: [],
+      blocks: [],
     };
 
     applyDataChange('Criação de disciplina', prev => ({
@@ -616,6 +755,7 @@ export function App() {
             label: 'Restauracao de backup',
             snapshot: cloneStudyData(data),
             createdAt: new Date().toISOString(),
+            createdAtMs: Date.now(),
           },
         ]);
         setData(cloneStudyData(backup.data));
@@ -633,7 +773,7 @@ export function App() {
       currentData: cloneStudyData(data),
       backups,
     };
-    triggerJsonDownload(`enem2025-backup-v${BACKUP_FILE_VERSION}-${new Date().toISOString().slice(0, 10)}.json`, payload);
+    triggerJsonDownload(`enem2025-backup-v${BACKUP_FILE_VERSION}-${toDateOnlyLocal(new Date())}.json`, payload);
     pushToast('Backup exportado para arquivo.', 'success');
   }
 
@@ -692,6 +832,7 @@ export function App() {
             label: 'Importacao de backup',
             snapshot: cloneStudyData(data),
             createdAt: new Date().toISOString(),
+            createdAtMs: Date.now(),
           },
         ]);
         setData(cloneStudyData(importedData));
@@ -712,35 +853,58 @@ export function App() {
     <div className="min-h-screen bg-gray-50 dark:bg-slate-950 text-gray-900 dark:text-slate-100 font-['Inter',sans-serif] transition-colors">
       {/* Top Navigation */}
       <nav className="bg-[#1a237e] dark:bg-slate-900 text-white shadow-lg sticky top-0 z-50 border-b border-transparent dark:border-slate-700">
-        <div className="w-full px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => setSidebarOpen(!sidebarOpen)}
-              className="lg:hidden p-2 hover:bg-white/10 rounded-lg transition-colors"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-              </svg>
-            </button>
-            <h1 className="text-lg font-bold flex items-center gap-2">
-              {'\u{1F4CA}'} Cronograma ENEM 2025
-            </h1>
+        <div className="w-full px-4 pt-3 pb-2">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <button
+                onClick={() => setSidebarOpen(!sidebarOpen)}
+                className="lg:hidden p-2 hover:bg-white/10 rounded-lg transition-colors"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                </svg>
+              </button>
+              <h1 className="text-lg font-bold flex items-center gap-2 truncate">
+                {'\u{1F4CA}'} Cronograma ENEM 2025
+              </h1>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={undoLastChange}
+                disabled={undoStack.length === 0}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm bg-white/10 hover:bg-white/20 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                title="Desfazer ultima alteracao"
+              >
+                <Undo2 size={16} />
+                <span className="hidden sm:inline">Desfazer</span>
+              </button>
+              <button
+                onClick={toggleTheme}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm bg-white/10 hover:bg-white/20 transition-colors"
+                title={theme === 'dark' ? 'Ativar modo claro' : 'Ativar modo escuro'}
+              >
+                {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+                <span className="hidden sm:inline">{theme === 'dark' ? 'Claro' : 'Escuro'}</span>
+              </button>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <div className="relative hidden md:block global-search-shell">
-              <div className="flex items-center gap-2 rounded-lg bg-white/10 border border-white/20 px-2.5 py-2 backdrop-blur-sm">
+
+          <div className="mt-2 flex flex-col lg:flex-row lg:items-center gap-1.5">
+            <div className="relative w-full lg:w-auto max-w-[340px] hidden md:block global-search-shell">
+              <div className="flex items-center gap-2 rounded-lg bg-white/10 border border-white/20 px-2 py-1.5 backdrop-blur-sm">
                 <Search size={14} className="text-white/80" />
                 <input
                   ref={globalSearchRef}
                   value={globalSearchQuery}
                   onChange={event => setGlobalSearchQuery(event.target.value)}
                   placeholder="Buscar assuntos, tags e notas... (Ctrl+K)"
-                  className="w-64 lg:w-72 bg-transparent text-xs lg:text-sm leading-5 text-white placeholder:text-white/70 outline-none"
+                  className="w-full lg:w-56 bg-transparent text-xs leading-5 text-white placeholder:text-white/70 outline-none"
                 />
                 <select
                   value={globalSearchType}
                   onChange={event => setGlobalSearchType(event.target.value as 'all' | 'subject' | 'topic' | 'tag')}
-                  className="rounded-md border border-white/20 bg-white/10 px-2 py-1 text-[11px] text-white/90"
+                  className="rounded-md border border-white/20 bg-white/10 px-1.5 py-1 text-[10px] text-white/90"
                 >
                   <option value="all" className="text-slate-900">Tudo</option>
                   <option value="subject" className="text-slate-900">Disciplinas</option>
@@ -768,55 +932,59 @@ export function App() {
                 </div>
               )}
             </div>
-            <button
-              onClick={undoLastChange}
-              disabled={undoStack.length === 0}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm bg-white/10 hover:bg-white/20 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-              title="Desfazer ultima alteracao"
-            >
-              <Undo2 size={16} />
-              <span className="hidden sm:inline">Desfazer</span>
-            </button>
-            <button
-              onClick={toggleTheme}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm bg-white/10 hover:bg-white/20 transition-colors"
-              title={theme === 'dark' ? 'Ativar modo claro' : 'Ativar modo escuro'}
-            >
-              {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
-              <span className="hidden sm:inline">{theme === 'dark' ? 'Claro' : 'Escuro'}</span>
-            </button>
-            <button
-              onClick={navigateToReviews}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors relative ${
-                view === 'reviews' ? 'bg-purple-600 text-white' : 'bg-white/10 hover:bg-white/20'
-              }`}
-            >
-              <Brain size={16} />
-              <span className="hidden sm:inline">Revisões</span>
-              {reviewsDueCount > 0 && (
-                <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-[10px] font-bold rounded-full w-5 h-5 flex items-center justify-center animate-pulse">
-                  {reviewsDueCount}
-                </span>
-              )}
-            </button>
-            <button
-              onClick={navigateToEssays}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors ${
-                view === 'essays' ? 'bg-cyan-600 text-white' : 'bg-white/10 hover:bg-white/20'
-              }`}
-            >
-              <FileText size={16} />
-              <span className="hidden sm:inline">Monitor de Redações</span>
-            </button>
-            <button
-              onClick={navigateToOverview}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors ${
-                view === 'overview' ? 'bg-white/20' : 'bg-white/10 hover:bg-white/20'
-              }`}
-            >
-              <LayoutDashboard size={16} />
-              <span className="hidden sm:inline">Visão Geral</span>
-            </button>
+
+            <div className="flex items-center gap-2 overflow-x-auto pb-1">
+              <button
+                onClick={navigateToOverview}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm whitespace-nowrap transition-colors ${
+                  view === 'overview' ? 'bg-white/25' : 'bg-white/10 hover:bg-white/20'
+                }`}
+              >
+                <LayoutDashboard size={15} /> Visao geral
+              </button>
+              <button
+                onClick={navigateToReviews}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm whitespace-nowrap transition-colors relative ${
+                  view === 'reviews' ? 'bg-purple-600 text-white' : 'bg-white/10 hover:bg-white/20'
+                }`}
+              >
+                <Brain size={15} /> Revisoes
+                {reviewsDueCount > 0 && (
+                  <span className="ml-1 inline-flex items-center justify-center min-w-5 h-5 px-1 rounded-full bg-red-500 text-[10px] font-bold text-white">
+                    {reviewsDueCount}
+                  </span>
+                )}
+              </button>
+              <button
+                onClick={navigateToEssays}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm whitespace-nowrap transition-colors ${
+                  view === 'essays' ? 'bg-cyan-600 text-white' : 'bg-white/10 hover:bg-white/20'
+                }`}
+              >
+                <FileText size={15} /> Redacoes
+              </button>
+              <button
+                onClick={navigateToBlocks}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm whitespace-nowrap transition-colors ${
+                  view === 'blocks' ? 'bg-indigo-600 text-white' : 'bg-white/10 hover:bg-white/20'
+                }`}
+              >
+                <Layers size={15} /> Blocos
+              </button>
+              <button
+                onClick={navigateToPracticeTests}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm whitespace-nowrap transition-colors ${
+                  view === 'practiceTests' ? 'bg-emerald-600 text-white' : 'bg-white/10 hover:bg-white/20'
+                }`}
+              >
+                <ClipboardList size={15} /> Simulados
+                {totalPracticeTestsCount > 0 && (
+                  <span className="ml-1 inline-flex items-center justify-center min-w-5 h-5 px-1 rounded-full bg-emerald-500 text-[10px] font-bold text-white">
+                    {totalPracticeTestsCount}
+                  </span>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       </nav>
@@ -826,7 +994,7 @@ export function App() {
         <aside
           className={`fixed lg:static inset-y-0 left-0 z-40 w-64 bg-white dark:bg-slate-900 shadow-lg lg:shadow-sm border-r border-gray-200 dark:border-slate-700 transform transition-transform duration-300 ease-in-out lg:transform-none ${
             sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
-          } pt-16 lg:pt-0 overflow-y-auto`}
+          } pt-24 lg:pt-0 overflow-y-auto`}
         >
           <div className="p-4">
             {/* Review Button in Sidebar */}
@@ -871,6 +1039,40 @@ export function App() {
               </div>
             </button>
 
+            <button
+              onClick={navigateToBlocks}
+              className={`w-full mb-4 px-3 py-2.5 rounded-xl flex items-center gap-3 transition-all text-sm ${
+                view === 'blocks'
+                  ? 'bg-indigo-600 text-white shadow-md'
+                  : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-900/20 dark:text-indigo-300 dark:hover:bg-indigo-900/40'
+              }`}
+            >
+              <Layers size={20} />
+              <div className="flex-1 text-left">
+                <p className="font-medium">Blocos / Fases</p>
+                <p className={`text-xs ${view === 'blocks' ? 'text-indigo-100' : 'text-indigo-500 dark:text-indigo-400'}`}>
+                  {totalBlocksCount} bloco{totalBlocksCount !== 1 ? 's' : ''} criado{totalBlocksCount !== 1 ? 's' : ''}
+                </p>
+              </div>
+            </button>
+
+            <button
+              onClick={navigateToPracticeTests}
+              className={`w-full mb-4 px-3 py-2.5 rounded-xl flex items-center gap-3 transition-all text-sm ${
+                view === 'practiceTests'
+                  ? 'bg-emerald-600 text-white shadow-md'
+                  : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/20 dark:text-emerald-300 dark:hover:bg-emerald-900/40'
+              }`}
+            >
+              <ClipboardList size={20} />
+              <div className="flex-1 text-left">
+                <p className="font-medium">Simulados</p>
+                <p className={`text-xs ${view === 'practiceTests' ? 'text-emerald-100' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                  {totalPracticeTestsCount} registrado{totalPracticeTestsCount !== 1 ? 's' : ''}
+                </p>
+              </div>
+            </button>
+
             <div className="flex items-center justify-between mb-3 px-2">
               <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider">
                 Disciplinas
@@ -885,21 +1087,7 @@ export function App() {
             </div>
 
             <div className="space-y-1">
-              {data.subjects.map(subject => {
-                const stats = getSubjectStats(subject);
-                const allTopics_ = getAllTopics(subject);
-                const overdueCount = allTopics_.filter(t => {
-                  if (!t.deadline || t.studied) return false;
-                  const info = getDeadlineInfo(t.deadline);
-                  return info?.urgency === 'overdue';
-                }).length;
-                const highPrioCount = allTopics_.filter(t => !t.studied && t.priority === 'alta').length;
-                const reviewsDue = allTopics_.filter(t => {
-                  if (!t.fsrsNextReview) return false;
-                  const today = new Date();
-                  today.setHours(0, 0, 0, 0);
-                  return new Date(t.fsrsNextReview + 'T00:00:00') <= today;
-                }).length;
+              {sidebarSubjects.map(({ subject, stats, overdueCount, highPrioCount, reviewsDue }) => {
                 const isActive = view === 'subject' && selectedSubjectId === subject.id;
 
                 return (
@@ -1018,40 +1206,55 @@ export function App() {
         )}
 
         {/* Main Content */}
-        <main className="flex-1 p-3 md:p-4 lg:p-5 min-w-0">
-          {view === 'reviews' ? (
-            <ReviewSystem
-              subjects={data.subjects}
-              fsrsConfig={data.settings.fsrs}
-              onUpdateFsrsConfig={updateFsrsConfig}
-              onUpdateSubject={updateSubject}
-              onNavigateToSubject={navigateToSubject}
-            />
-          ) : view === 'essays' ? (
-            <EssayMonitor
-              settings={data.settings.essayMonitor}
-              onUpdateSettings={updateEssayMonitor}
-            />
-          ) : view === 'subject' && selectedSubject ? (
-            <SubjectDetail
-              subject={selectedSubject}
-              globalTagSuggestions={globalTagSuggestions}
-              fsrsConfig={data.settings.fsrs}
-              onBack={navigateToOverview}
-              onUpdate={updateSubject}
-            />
-          ) : (
-            <Overview
-              subjects={data.subjects}
-              schedule={data.settings.schedule}
-              goals={data.settings.goals}
-              essays={data.settings.essayMonitor.essays}
-              onUpdateSchedule={updateSchedule}
-              onUpdateGoals={updateGoals}
-              onSelectSubject={navigateToSubject}
-              onOpenReviews={navigateToReviews}
-            />
-          )}
+        <main className={`flex-1 min-w-0 ${view === 'subject' ? 'p-0' : 'p-3 md:p-4 lg:p-5'}`}>
+          <Suspense fallback={<ViewLoadingFallback />}>
+            {view === 'reviews' ? (
+              <ReviewSystem
+                subjects={data.subjects}
+                fsrsConfig={data.settings.fsrs}
+                onUpdateFsrsConfig={updateFsrsConfig}
+                onUpdateSubject={updateSubject}
+                onNavigateToSubject={navigateToSubject}
+              />
+            ) : view === 'essays' ? (
+              <EssayMonitor
+                settings={data.settings.essayMonitor}
+                onUpdateSettings={updateEssayMonitor}
+              />
+            ) : view === 'blocks' ? (
+              <BlockManager
+                subjects={data.subjects}
+                onUpdateSubject={updateSubject}
+                onNavigateToSubject={navigateToSubject}
+              />
+            ) : view === 'practiceTests' ? (
+              <PracticeTests
+                settings={data.settings.practiceTests}
+                onUpdateSettings={updatePracticeTests}
+              />
+            ) : view === 'subject' && selectedSubject ? (
+              <SubjectDetail
+                subject={selectedSubject}
+                globalTagSuggestions={globalTagSuggestions}
+                fsrsConfig={data.settings.fsrs}
+                onBack={navigateToOverview}
+                onUpdate={updateSubject}
+                focusTopicId={focusTopic?.subjectId === selectedSubject.id ? focusTopic.topicId : null}
+                onConsumeFocusTopic={() => setFocusTopic(null)}
+              />
+            ) : (
+              <Overview
+                subjects={data.subjects}
+                schedule={data.settings.schedule}
+                goals={data.settings.goals}
+                essays={data.settings.essayMonitor.essays}
+                onUpdateSchedule={updateSchedule}
+                onUpdateGoals={updateGoals}
+                onSelectSubject={navigateToSubject}
+                onOpenReviews={navigateToReviews}
+              />
+            )}
+          </Suspense>
         </main>
       </div>
 
@@ -1297,6 +1500,10 @@ export function App() {
     </div>
   );
 }
+
+
+
+
 
 
 

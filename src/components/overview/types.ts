@@ -22,7 +22,7 @@ export interface WeeklyReviewDay {
   items: UpcomingReviewItem[];
 }
 
-export type ConsistencyPanelMode = 'radial' | 'heatmap' | 'both' | 'evolution';
+export type ConsistencyPanelMode = 'radial' | 'heatmap' | 'both' | 'evolution' | 'line';
 export type OverviewTab = 'consistency' | 'subjects' | 'priorities';
 export type HeatmapDay = { date: string; count: number };
 
@@ -63,7 +63,7 @@ export type DeadlineInfoView = {
 };
 
 export interface DeadlineDisplayItem extends DeadlineItem {
-  subjectId: string | null;
+  subjectId: string;
   deadlineInfo: DeadlineInfoView;
 }
 

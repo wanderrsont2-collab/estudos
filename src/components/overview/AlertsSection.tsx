@@ -1,4 +1,4 @@
-import { AlertTriangle, Brain } from 'lucide-react';
+import { AlertTriangle, Brain, ArrowRight } from 'lucide-react';
 import { getReviewStatus } from '../../fsrs';
 import type { DeadlineDisplayItem, ReviewDueDisplayItem } from './types';
 
@@ -13,53 +13,72 @@ export function AlertsSection({ overdueDeadlines, reviewsDue, onSelectSubject, o
   if (overdueDeadlines.length === 0 && reviewsDue.length === 0) return null;
 
   return (
-    <section className="grid grid-cols-1 md:grid-cols-2 gap-4">
-      <div className="rounded-2xl border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 p-4">
-        <div className="flex items-center gap-2 text-red-700 dark:text-red-300 font-semibold text-sm">
-          <AlertTriangle size={16} /> Prazos vencidos ({overdueDeadlines.length})
+    <div className="animate-fade-in rounded-2xl border border-red-200/60 dark:border-red-900/40 bg-gradient-to-br from-red-50 to-orange-50 dark:from-red-950/20 dark:to-orange-950/10 shadow-sm overflow-hidden">
+      <div className="p-5">
+        <div className="flex items-center gap-2 mb-4">
+          <AlertTriangle size={18} className="text-red-500" />
+          <h3 className="text-sm font-bold text-red-700 dark:text-red-400">Alertas</h3>
         </div>
-        {overdueDeadlines.length === 0 ? (
-          <p className="text-xs text-red-500 dark:text-red-300/80 mt-2">Nenhum prazo vencido.</p>
-        ) : (
-          <div className="mt-2 space-y-1.5">
-            {overdueDeadlines.slice(0, 5).map(item => (
-              <button
-                key={`overdue-${item.topic.id}`}
-                onClick={() => item.subjectId && onSelectSubject(item.subjectId)}
-                className="block w-full text-left text-xs text-red-700 dark:text-red-200 bg-white/70 dark:bg-slate-900/50 hover:bg-white dark:hover:bg-slate-800 px-2 py-1.5 rounded-lg transition-colors"
-              >
-                {item.subjectEmoji} {item.topic.name}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
 
-      <div className="rounded-2xl border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-900/20 p-4">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 text-indigo-700 dark:text-indigo-300 font-semibold text-sm">
-            <Brain size={16} /> Revisoes pendentes ({reviewsDue.length})
+        {overdueDeadlines.length > 0 && (
+          <div className="mb-4">
+            <p className="text-[10px] uppercase tracking-wider font-bold text-red-500 mb-2">Prazos vencidos</p>
+            <div className="space-y-1.5">
+              {overdueDeadlines.slice(0, 3).map(item => (
+                <button
+                  key={`overdue-${item.topic.id}`}
+                  onClick={() => onSelectSubject(item.subjectId)}
+                  className="w-full text-left rounded-lg bg-white/60 dark:bg-slate-900/40 p-2.5 flex items-center justify-between hover:bg-white dark:hover:bg-slate-900/60 transition-colors group"
+                >
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate">
+                      {item.subjectEmoji} {item.topic.name}
+                    </p>
+                    <p className="text-[10px] text-red-500 truncate">{item.subjectName} - {item.deadlineInfo.text}</p>
+                  </div>
+                  <ArrowRight size={14} className="text-slate-400 group-hover:text-red-500 transition-colors shrink-0" />
+                </button>
+              ))}
+            </div>
           </div>
-          <button onClick={onOpenReviews} className="text-xs rounded-md bg-indigo-600 text-white px-2.5 py-1.5 hover:bg-indigo-700 transition-colors">
-            Abrir
-          </button>
-        </div>
-        {reviewsDue.length === 0 ? (
-          <p className="text-xs text-indigo-500 dark:text-indigo-300/80 mt-2">Nenhuma revisao pendente.</p>
-        ) : (
-          <div className="mt-2 space-y-1.5">
-            {reviewsDue.slice(0, 5).map(item => {
-              const status = getReviewStatus(item.topic.fsrsNextReview);
-              return (
-                <div key={`review-due-${item.topic.id}`} className="text-xs text-indigo-800 dark:text-indigo-200 bg-white/70 dark:bg-slate-900/50 px-2 py-1.5 rounded-lg flex items-center justify-between gap-2">
-                  <span>{item.subjectEmoji} {item.topic.name}</span>
-                  <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${status.className}`}>{status.text}</span>
-                </div>
-              );
-            })}
+        )}
+
+        {reviewsDue.length > 0 && (
+          <div>
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <p className="text-[10px] uppercase tracking-wider font-bold text-amber-600 dark:text-amber-400">
+                Revisoes atrasadas
+              </p>
+              <button
+                onClick={onOpenReviews}
+                className="text-xs font-semibold text-cyan-600 hover:text-cyan-700 inline-flex items-center gap-1 transition-colors"
+              >
+                <Brain size={13} /> Ver painel
+              </button>
+            </div>
+            <div className="space-y-1.5">
+              {reviewsDue.slice(0, 3).map(item => {
+                const status = getReviewStatus(item.topic.fsrsNextReview);
+                return (
+                  <button
+                    key={`review-due-${item.topic.id}`}
+                    onClick={() => onSelectSubject(item.subjectId)}
+                    className="w-full text-left rounded-lg bg-white/60 dark:bg-slate-900/40 p-2.5 flex items-center justify-between gap-2 hover:bg-white dark:hover:bg-slate-900/60 transition-colors"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate">
+                        {item.subjectEmoji} {item.topic.name}
+                      </p>
+                      <p className="text-[10px] text-slate-500 truncate">{item.subjectName}</p>
+                    </div>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded ${status.className}`}>{status.text}</span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
         )}
       </div>
-    </section>
+    </div>
   );
 }

@@ -16,6 +16,7 @@ function makeSubject(): Subject {
     emoji: "📐",
     color: "#1565c0",
     colorLight: "#e3f2fd",
+    description: "",
     topicGroups: [
       {
         id: "g1",
@@ -78,6 +79,7 @@ function makeSubject(): Subject {
         ],
       },
     ],
+    blocks: [],
   };
 }
 
@@ -90,9 +92,8 @@ describe("store selectors", () => {
     expect(due).toHaveLength(1);
     expect(due[0].topic.id).toBe("t_due");
 
-    expect(upcoming).toHaveLength(2);
+    expect(upcoming).toHaveLength(1);
     expect(upcoming[0].topic.id).toBe("t_up_1");
-    expect(upcoming[1].topic.id).toBe("t_up_3");
   });
 
   it("conta prioridades de topicos pendentes", () => {

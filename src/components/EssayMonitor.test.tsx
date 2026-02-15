@@ -19,9 +19,9 @@ describe("EssayMonitor", () => {
 
     render(<EssayMonitor settings={settings} onUpdateSettings={onUpdateSettings} />);
 
-    fireEvent.click(screen.getAllByRole("button", { name: /^Nova$/i })[0]);
+    fireEvent.click(screen.getByRole("button", { name: /nova/i }));
 
-    const themeInput = screen.getByLabelText("Tema");
+    const themeInput = screen.getAllByRole("textbox")[0];
     fireEvent.change(themeInput, { target: { value: "Tema de teste" } });
     fireEvent.click(screen.getByRole("button", { name: /^Salvar$/i }));
 

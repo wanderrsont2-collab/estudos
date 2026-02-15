@@ -1,5 +1,4 @@
-import { Brain } from 'lucide-react';
-import { getReviewStatus } from '../../fsrs';
+import { Calendar, Brain } from 'lucide-react';
 import type { WeeklyReviewDay } from './types';
 import { formatWeekDayDate } from './utils';
 
@@ -9,56 +8,71 @@ interface WeeklyReviewCalendarProps {
   onOpenReviews: () => void;
 }
 
-function ReviewDayCard({ day, onSelectSubject }: { day: WeeklyReviewDay; onSelectSubject: (id: string) => void }) {
-  return (
-    <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-2.5">
-      <div className="flex items-center justify-between gap-2 mb-2">
-        <p className="text-xs font-semibold text-slate-700 dark:text-slate-100">{day.label}</p>
-        <span className="text-[10px] text-slate-500 dark:text-slate-400">{formatWeekDayDate(day.isoDate)}</span>
-      </div>
-      {day.items.length === 0 ? <p className="text-[11px] text-slate-400 dark:text-slate-500">Sem revisoes</p> : (
-        <div className="space-y-1.5">
-          {day.items.slice(0, 4).map(item => {
-            const status = getReviewStatus(item.nextReview);
-            return (
-              <button key={`review-item-${day.isoDate}-${item.topicId}`} onClick={() => onSelectSubject(item.subjectId)} className="w-full text-left rounded-md border border-slate-200 dark:border-slate-700 px-2 py-1.5 hover:bg-slate-50 dark:hover:bg-slate-800/70 transition-colors flex items-center justify-between gap-2">
-                <div className="min-w-0">
-                  <p className="text-[11px] font-medium text-slate-700 dark:text-slate-100 truncate">{item.subjectEmoji} {item.topicName}</p>
-                  <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate">{item.groupName}</p>
-                </div>
-                <span className={`px-1.5 py-0.5 rounded-full text-[10px] whitespace-nowrap ${status.className}`}>{status.text}</span>
-              </button>
-            );
-          })}
-          {day.items.length > 4 ? <p className="text-[10px] text-slate-400 dark:text-slate-500">+{day.items.length - 4} revisao(oes)</p> : null}
-        </div>
-      )}
-    </div>
-  );
+function getSubjectDotColor(subjectId: string): string {
+  let hash = 0;
+  for (let i = 0; i < subjectId.length; i += 1) {
+    hash = (hash * 31 + subjectId.charCodeAt(i)) | 0;
+  }
+  const hue = Math.abs(hash) % 360;
+  return `hsl(${hue} 76% 52%)`;
 }
 
-export function WeeklyReviewCalendar({
-  weeklyReviewCalendar,
-  onSelectSubject,
-  onOpenReviews,
-}: WeeklyReviewCalendarProps) {
+export function WeeklyReviewCalendar({ weeklyReviewCalendar, onSelectSubject, onOpenReviews }: WeeklyReviewCalendarProps) {
+  const totalReviews = weeklyReviewCalendar.reduce((sum, day) => sum + day.items.length, 0);
+
   return (
-    <div className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm p-4">
-      <div className="flex items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-100 inline-flex items-center gap-2">
-          <Brain size={16} /> Revisoes da semana
-        </h2>
-        <button onClick={onOpenReviews} className="text-xs rounded-md border border-slate-200 dark:border-slate-700 px-2.5 py-1.5 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
-          Ver painel
-        </button>
-      </div>
-      {weeklyReviewCalendar.every(day => day.items.length === 0) ? (
-        <p className="text-xs text-slate-400 dark:text-slate-500 mt-3">Nenhuma revisao agendada para esta semana.</p>
-      ) : (
-        <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2">
-          {weeklyReviewCalendar.map(day => <ReviewDayCard key={`review-day-${day.isoDate}`} day={day} onSelectSubject={onSelectSubject} />)}
+    <div className="animate-fade-in rounded-2xl border border-slate-200 dark:border-slate-700/80 bg-white dark:bg-slate-900 shadow-sm overflow-hidden">
+      <div className="p-5">
+        <div className="flex items-center justify-between mb-4 gap-3">
+          <div className="flex items-center gap-2">
+            <Calendar size={18} className="text-indigo-500" />
+            <h3 className="text-sm font-bold text-slate-900 dark:text-white">Revisoes da Semana</h3>
+          </div>
+          {totalReviews > 0 && (
+            <button
+              onClick={onOpenReviews}
+              className="text-[11px] font-semibold text-cyan-600 hover:text-cyan-700 inline-flex items-center gap-1 transition-colors"
+            >
+              <Brain size={13} /> Ver todas
+            </button>
+          )}
         </div>
-      )}
+
+        <div className="grid grid-cols-7 gap-1.5">
+          {weeklyReviewCalendar.map((day, index) => (
+            <div
+              key={`review-day-${day.isoDate}`}
+              className={`rounded-xl p-2.5 text-center border transition-all ${
+                index === 0
+                  ? 'bg-cyan-50 dark:bg-cyan-950/20 border-cyan-200/60 dark:border-cyan-800/40'
+                  : 'bg-slate-50 dark:bg-slate-800/30 border-slate-100 dark:border-slate-800'
+              }`}
+            >
+              <p className={`text-[10px] font-bold uppercase ${index === 0 ? 'text-cyan-600 dark:text-cyan-400' : 'text-slate-400'}`}>
+                {day.label.slice(0, 3)}
+              </p>
+              <p className="text-[9px] text-slate-400 mt-0.5">{formatWeekDayDate(day.isoDate)}</p>
+              <p className={`text-lg font-black mt-0.5 ${day.items.length > 0 ? 'text-slate-900 dark:text-white' : 'text-slate-300 dark:text-slate-600'}`}>
+                {day.items.length}
+              </p>
+              <div className="flex flex-wrap gap-0.5 justify-center mt-1.5 min-h-[8px]">
+                {day.items.slice(0, 4).map(item => (
+                  <button
+                    key={`review-dot-${day.isoDate}-${item.topicId}`}
+                    onClick={() => onSelectSubject(item.subjectId)}
+                    className="w-2 h-2 rounded-full hover:scale-150 transition-transform"
+                    style={{ backgroundColor: getSubjectDotColor(item.subjectId) }}
+                    title={`${item.subjectEmoji} ${item.topicName}`}
+                  />
+                ))}
+                {day.items.length > 4 && (
+                  <span className="text-[8px] text-slate-400 font-bold">+{day.items.length - 4}</span>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

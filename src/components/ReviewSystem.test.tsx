@@ -1,130 +1,93 @@
 /* @vitest-environment jsdom */
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ReviewSystem } from "./ReviewSystem";
 import type { FSRSConfig } from "../fsrs";
-import type { ReviewEntry, Subject } from "../types";
+import type { Subject } from "../types";
 
-function makeSubjectsWithUpcoming(count: number): Subject[] {
-  const today = new Date();
-  const toIso = (offset: number) => {
-    const d = new Date(today);
-    d.setDate(today.getDate() + offset);
-    return d.toISOString().slice(0, 10);
-  };
+const fsrsConfig: FSRSConfig = {
+  version: "fsrs5",
+  requestedRetention: 0.9,
+  customWeights: null,
+  againMinIntervalDays: 0,
+  maxIntervalDays: 36500,
+};
 
+function dateOffset(days: number): string {
+  const date = new Date();
+  date.setHours(0, 0, 0, 0);
+  date.setDate(date.getDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function makeSubjects(): Subject[] {
   return [
     {
-      id: "subj",
-      name: "Matematica",
+      id: "subj_1",
+      name: "Matemática",
       emoji: "📐",
-      color: "#1565c0",
-      colorLight: "#e3f2fd",
+      color: "#4f46e5",
+      colorLight: "#eef2ff",
+      description: "",
       topicGroups: [
         {
-          id: "g1",
-          name: "Geral",
-          topics: Array.from({ length: count }, (_, idx) => ({
-            id: `t_${idx + 1}`,
-            name: `Topic ${idx + 1}`,
-            studied: true,
-            questionsTotal: 0,
-            questionsCorrect: 0,
-            questionLogs: [],
-            notes: "",
-            tags: [],
-            dateStudied: null,
-            priority: null,
-            deadline: null,
-            fsrsDifficulty: 2,
-            fsrsStability: 3,
-            fsrsLastReview: toIso(-2),
-            fsrsNextReview: toIso(idx + 1),
-            reviewHistory: [],
-          })),
-        },
-      ],
-    },
-  ];
-}
-
-function makeReviewEntry(): ReviewEntry {
-  return {
-    id: "rev_1",
-    reviewNumber: 1,
-    date: "2026-02-10",
-    rating: 3,
-    ratingLabel: "Bom",
-    difficultyBefore: 4,
-    difficultyAfter: 3.5,
-    stabilityBefore: 2,
-    stabilityAfter: 3,
-    intervalDays: 3,
-    retrievability: 0.8,
-    performanceScore: null,
-    questionsTotal: 0,
-    questionsCorrect: 0,
-  };
-}
-
-function makeSubjectsWithActiveTopicGroup(): Subject[] {
-  return [
-    {
-      id: "subj_active",
-      name: "Historia",
-      emoji: "📚",
-      color: "#5d4037",
-      colorLight: "#efebe9",
-      topicGroups: [
-        {
-          id: "g_active",
-          name: "Brasil Colonial",
+          id: "group_1",
+          name: "Álgebra",
           topics: [
             {
-              id: "topic_active",
-              name: "Economia açucareira",
+              id: "topic_due",
+              name: "Função afim",
               studied: true,
-              questionsTotal: 0,
-              questionsCorrect: 0,
+              questionsTotal: 20,
+              questionsCorrect: 15,
+              questionLogs: [],
+              notes: "",
+              tags: ["funcoes"],
+              dateStudied: dateOffset(-10),
+              priority: "alta",
+              deadline: null,
+              fsrsDifficulty: 4,
+              fsrsStability: 6,
+              fsrsLastReview: dateOffset(-6),
+              fsrsNextReview: dateOffset(-1),
+              reviewHistory: [],
+            },
+            {
+              id: "topic_upcoming",
+              name: "Progressão aritmética",
+              studied: true,
+              questionsTotal: 10,
+              questionsCorrect: 8,
               questionLogs: [],
               notes: "",
               tags: [],
-              dateStudied: null,
-              priority: null,
+              dateStudied: dateOffset(-7),
+              priority: "media",
               deadline: null,
-              fsrsDifficulty: 3,
-              fsrsStability: 4,
-              fsrsLastReview: "2026-02-09",
-              fsrsNextReview: null,
-              reviewHistory: [makeReviewEntry()],
+              fsrsDifficulty: 3.5,
+              fsrsStability: 5,
+              fsrsLastReview: dateOffset(-2),
+              fsrsNextReview: dateOffset(2),
+              reviewHistory: [],
             },
           ],
         },
       ],
+      blocks: [],
     },
   ];
 }
 
-describe("ReviewSystem visible count", () => {
+describe("ReviewSystem", () => {
   afterEach(() => {
     cleanup();
   });
 
-  beforeEach(() => {
-    window.localStorage.clear();
-  });
-
-  it("mostra 10 por padrao e permite trocar para 20 em proximas revisoes", () => {
-    const fsrsConfig: FSRSConfig = {
-      version: "fsrs5",
-      requestedRetention: 0.9,
-      customWeights: null,
-    };
-
+  it("renderiza seções principais com dados reais", () => {
     render(
       <ReviewSystem
-        subjects={makeSubjectsWithUpcoming(25)}
+        subjects={makeSubjects()}
         fsrsConfig={fsrsConfig}
         onUpdateFsrsConfig={vi.fn()}
         onUpdateSubject={vi.fn()}
@@ -132,37 +95,65 @@ describe("ReviewSystem visible count", () => {
       />,
     );
 
-    expect(screen.getByText("Topic 10")).toBeInTheDocument();
-    expect(screen.queryByText("Topic 11")).not.toBeInTheDocument();
-
-    const upcomingSelect = screen.getByLabelText("Quantidade de próximas revisões");
-    fireEvent.change(upcomingSelect, { target: { value: "20" } });
-
-    expect(screen.getByText("Topic 20")).toBeInTheDocument();
+    expect(screen.getByText("Sistema de Revisões")).toBeInTheDocument();
+    expect(screen.getByText("Revisões Pendentes")).toBeInTheDocument();
+    expect(screen.getByText("Próximas Revisões")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Revisar" })).toBeInTheDocument();
   });
 
-  it("aplica busca por nome do grupo em assuntos com revisao ativa", () => {
-    const fsrsConfig: FSRSConfig = {
-      version: "fsrs5",
-      requestedRetention: 0.9,
-      customWeights: null,
-    };
+  it("aplica avaliação e chama onUpdateSubject", async () => {
+    const onUpdateSubject = vi.fn();
 
     render(
       <ReviewSystem
-        subjects={makeSubjectsWithActiveTopicGroup()}
+        subjects={makeSubjects()}
         fsrsConfig={fsrsConfig}
         onUpdateFsrsConfig={vi.fn()}
+        onUpdateSubject={onUpdateSubject}
+        onNavigateToSubject={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Revisar" }));
+    expect(screen.getByText("Como foi a revisão?")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Bom/i }));
+
+    await waitFor(() => {
+      expect(onUpdateSubject).toHaveBeenCalledTimes(1);
+    });
+
+    const updatedSubject = onUpdateSubject.mock.calls[0][0] as Subject;
+    const updatedTopic = updatedSubject.topicGroups[0].topics.find((topic) => topic.id === "topic_due");
+
+    expect(updatedTopic).toBeDefined();
+    expect(updatedTopic?.reviewHistory.length).toBe(1);
+    expect(updatedTopic?.fsrsLastReview).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(updatedTopic?.fsrsNextReview).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(screen.queryByText("Como foi a revisão?")).not.toBeInTheDocument();
+  });
+
+  it("permite alterar versão e retenção do FSRS", () => {
+    const onUpdateFsrsConfig = vi.fn();
+
+    render(
+      <ReviewSystem
+        subjects={makeSubjects()}
+        fsrsConfig={fsrsConfig}
+        onUpdateFsrsConfig={onUpdateFsrsConfig}
         onUpdateSubject={vi.fn()}
         onNavigateToSubject={vi.fn()}
       />,
     );
 
-    expect(screen.getByText("Economia açucareira")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Configurações" }));
+    fireEvent.click(screen.getByRole("button", { name: "FSRS-6" }));
 
-    const searchInput = screen.getByPlaceholderText("Buscar por assunto, nota ou tag...");
-    fireEvent.change(searchInput, { target: { value: "colonial" } });
+    const slider = screen.getByRole("slider");
+    fireEvent.change(slider, { target: { value: "95" } });
 
-    expect(screen.getByText("Economia açucareira")).toBeInTheDocument();
+    const calls = onUpdateFsrsConfig.mock.calls.map((call) => call[0] as FSRSConfig);
+    expect(calls.some((config) => config.version === "fsrs6")).toBe(true);
+    expect(calls.some((config) => Math.abs(config.requestedRetention - 0.95) < 0.0001)).toBe(true);
   });
 });

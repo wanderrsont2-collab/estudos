@@ -13,13 +13,16 @@ export interface ReviewEntry {
   stabilityBefore: number;
   stabilityAfter: number;
   intervalDays: number;
+  // --- NOVOS CAMPOS ADICIONADOS ---
+  scheduledDays?: number; // Opcional para manter compatibilidade com historico antigo
+  algorithmVersion?: FSRSVersion;
+  requestedRetention?: number;
+  usedCustomWeights?: boolean;
+  // --------------------------------
   retrievability: number | null;
   performanceScore: number | null; // questions accuracy at time of review
   questionsTotal: number;
   questionsCorrect: number;
-  algorithmVersion?: FSRSVersion;
-  requestedRetention?: number;
-  usedCustomWeights?: boolean;
 }
 
 export interface QuestionLogEntry {
@@ -60,7 +63,9 @@ export interface Subject {
   emoji: string;
   color: string;
   colorLight: string;
+  description: string;
   topicGroups: TopicGroup[];
+  blocks: StudyBlock[];
 }
 
 export interface ScheduleCellData {
@@ -99,6 +104,27 @@ export interface EssayMonitorSettings {
   timerDurationMinutes: 60 | 90;
 }
 
+export type PracticeQuestionStatus = 'wrong' | 'mastered';
+
+export interface PracticeQuestionMark {
+  questionNumber: number; // 1-based
+  status: PracticeQuestionStatus;
+}
+
+export interface PracticeTestEntry {
+  id: string;
+  date: string; // YYYY-MM-DD
+  totalQuestions: number;
+  correctAnswers: number;
+  questionMarks: PracticeQuestionMark[];
+  createdAt: string; // ISO
+  updatedAt: string; // ISO
+}
+
+export interface PracticeTestsSettings {
+  tests: PracticeTestEntry[];
+}
+
 export interface StudyGoals {
   dailyQuestionsTarget: number;
   weeklyReviewTarget: number;
@@ -114,12 +140,40 @@ export interface StudySession {
   type: 'questions' | 'review' | 'reading' | 'essay';
 }
 
+export interface BlockPracticeTest {
+  id: string;
+  date: string; // YYYY-MM-DD
+  questionsTotal: number;
+  correctAnswers: number;
+  notes: string;
+}
+
+export interface BlockCumulativeReview {
+  id: string;
+  title: string;
+  questionsCount: number;
+  goalText: string;
+  completed: boolean;
+}
+
+export interface StudyBlock {
+  id: string;
+  name: string;
+  description: string;
+  color: string;
+  order: number;
+  topicGroupIds: string[]; // references TopicGroup.id within the same subject
+  practiceTests: BlockPracticeTest[];
+  cumulativeReviews: BlockCumulativeReview[];
+}
+
 export interface StudyData {
   subjects: Subject[];
   settings: {
     fsrs: FSRSConfig;
     schedule: WeeklySchedule;
     essayMonitor: EssayMonitorSettings;
+    practiceTests: PracticeTestsSettings;
     goals: StudyGoals;
   };
   lastUpdated: string;

@@ -12,7 +12,9 @@ const subjects: Subject[] = [
     emoji: "📐",
     color: "#1565c0",
     colorLight: "#e3f2fd",
+    description: "",
     topicGroups: [],
+    blocks: [],
   },
 ];
 

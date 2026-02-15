@@ -1,5 +1,4 @@
-import { memo } from 'react';
-import { TrendingUp } from 'lucide-react';
+import { BookOpen, ArrowRight } from 'lucide-react';
 import type { Subject } from '../../types';
 import type { SubjectStatsView } from './types';
 import { formatPercent } from './utils';
@@ -10,49 +9,70 @@ interface SubjectsPerformanceProps {
   onSelectSubject: (id: string) => void;
 }
 
-const SubjectRow = memo(function SubjectRow({
-  subject,
-  stats,
-  onSelectSubject,
-}: {
-  subject: Subject;
-  stats: SubjectStatsView;
-  onSelectSubject: (id: string) => void;
-}) {
-  return (
-    <button onClick={() => onSelectSubject(subject.id)} className="w-full px-4 py-3 text-left hover:bg-gray-50 dark:hover:bg-slate-800 transition-colors">
-      <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-sm font-semibold truncate" style={{ color: subject.color }}>{subject.emoji} {subject.name}</p>
-          <p className="text-[11px] text-gray-500 dark:text-slate-400 mt-0.5">
-            {stats.studied}/{stats.total} estudados - {stats.questionsCorrect}/{stats.questionsTotal} questoes
-          </p>
-        </div>
-        <div className="text-right shrink-0">
-          <p className="text-sm font-bold text-gray-700 dark:text-slate-100">{formatPercent(stats.progresso)}</p>
-          <p className="text-[11px] text-gray-400 dark:text-slate-500">{formatPercent(stats.rendimento)} rend.</p>
-        </div>
-      </div>
-      <div className="mt-2 h-1.5 rounded-full bg-gray-100 dark:bg-slate-800 overflow-hidden">
-        <div className="h-1.5 rounded-full transition-all duration-500" style={{ width: `${Math.min(stats.progresso * 100, 100)}%`, backgroundColor: subject.color }} />
-      </div>
-    </button>
-  );
-});
-
 export function SubjectsPerformance({ subjectsCount, sortedSubjects, onSelectSubject }: SubjectsPerformanceProps) {
   return (
-    <div className="rounded-2xl bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 shadow-sm overflow-hidden">
-      <div className="px-4 py-3 border-b border-gray-100 dark:border-slate-800 flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-gray-700 dark:text-slate-100 inline-flex items-center gap-2">
-          <TrendingUp size={16} /> Desempenho por disciplina
-        </h2>
-        <span className="text-xs text-gray-400 dark:text-slate-500">{subjectsCount} disciplinas</span>
-      </div>
-      <div className="divide-y divide-gray-100 dark:divide-slate-800">
-        {sortedSubjects.map(({ subject, stats }) => (
-          <SubjectRow key={`subject-row-${subject.id}`} subject={subject} stats={stats} onSelectSubject={onSelectSubject} />
-        ))}
+    <div className="animate-fade-in rounded-2xl border border-slate-200 dark:border-slate-700/80 bg-white dark:bg-slate-900 shadow-sm overflow-hidden">
+      <div className="p-5">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <BookOpen size={18} className="text-blue-500" />
+            <h3 className="text-sm font-bold text-slate-900 dark:text-white">Disciplinas</h3>
+          </div>
+          <span className="text-[10px] uppercase tracking-wider font-bold text-slate-400">{subjectsCount} total</span>
+        </div>
+
+        {sortedSubjects.length === 0 ? (
+          <div className="text-center py-8">
+            <BookOpen size={32} className="mx-auto text-slate-300 dark:text-slate-600 mb-2" />
+            <p className="text-sm text-slate-400">Nenhuma disciplina cadastrada</p>
+          </div>
+        ) : (
+          <div className="space-y-2.5">
+            {sortedSubjects.map(({ subject, stats }) => (
+              <button
+                key={subject.id}
+                onClick={() => onSelectSubject(subject.id)}
+                className="w-full text-left rounded-xl border border-slate-100 dark:border-slate-800 p-3.5 hover:border-slate-200 dark:hover:border-slate-700 hover:shadow-md transition-all duration-200 group bg-slate-50/50 dark:bg-slate-800/30"
+              >
+                <div className="flex items-center justify-between mb-2.5">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div className="w-3 h-3 rounded-full shadow-sm" style={{ backgroundColor: subject.color }} />
+                    <span className="text-sm font-bold text-slate-800 dark:text-slate-100 truncate">
+                      {subject.emoji} {subject.name}
+                    </span>
+                  </div>
+                  <ArrowRight size={14} className="text-slate-300 group-hover:text-cyan-500 transition-colors shrink-0" />
+                </div>
+                <div className="flex items-center gap-4 text-[11px]">
+                  <span className="text-slate-500 dark:text-slate-400">
+                    <span className="font-bold text-slate-700 dark:text-slate-300">{stats.studied}</span>/{stats.total} topicos
+                  </span>
+                  <span className="text-slate-500 dark:text-slate-400">
+                    Rendimento:{' '}
+                    <span className={`font-bold ${
+                      stats.rendimento >= 0.7
+                        ? 'text-emerald-600 dark:text-emerald-400'
+                        : stats.rendimento >= 0.5
+                          ? 'text-amber-600 dark:text-amber-400'
+                          : 'text-red-600 dark:text-red-400'
+                    }`}>
+                      {formatPercent(stats.rendimento)}
+                    </span>
+                  </span>
+                </div>
+                <div className="mt-2.5 h-1.5 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
+                  <div
+                    className="h-full rounded-full transition-all duration-700"
+                    style={{
+                      width: `${Math.min(100, stats.progresso * 100)}%`,
+                      backgroundColor: subject.color,
+                    }}
+                  />
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

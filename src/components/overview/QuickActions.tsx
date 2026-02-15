@@ -1,54 +1,67 @@
 import { memo } from 'react';
+import { Target, RotateCcw, AlertTriangle, BarChart3, Brain, FileText } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 
 const QuickCard = memo(function QuickCard({
   title,
   value,
   subtitle,
   progress,
-  color = 'slate',
+  icon: Icon,
+  gradient,
   urgent = false,
   onClick,
+  delay = 0,
 }: {
   title: string;
   value: string | number;
   subtitle?: string;
   progress?: number;
-  color?: string;
+  icon: LucideIcon;
+  gradient: string;
   urgent?: boolean;
   onClick?: () => void;
+  delay?: number;
 }) {
-  const colorMap: Record<string, string> = {
-    cyan: 'border-cyan-200 dark:border-cyan-800 bg-cyan-50 dark:bg-cyan-900/20 text-cyan-700 dark:text-cyan-200',
-    indigo: 'border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-200',
-    red: 'border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-200',
-    emerald: 'border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-200',
-    violet: 'border-violet-200 dark:border-violet-800 bg-violet-50 dark:bg-violet-900/20 text-violet-700 dark:text-violet-200',
-    slate: 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-700 dark:text-slate-200',
-  };
+  const cardClass = `animate-slide-up min-w-[160px] flex-shrink-0 rounded-2xl border p-4 transition-all duration-300 hover:shadow-xl bg-white dark:bg-slate-900 border-slate-200/80 dark:border-slate-700/80 ${
+    urgent ? 'ring-2 ring-red-400/50 ring-offset-2 dark:ring-offset-slate-950' : ''
+  } ${onClick ? 'cursor-pointer' : ''}`;
 
-  const cardClass = `min-w-[140px] flex-shrink-0 rounded-xl border p-3 ${colorMap[color] ?? colorMap.slate} ${urgent ? 'ring-2 ring-red-400 ring-offset-2 dark:ring-offset-slate-900' : ''}`;
   const body = (
     <>
-      <p className="text-[11px] uppercase tracking-wide text-slate-500 dark:text-slate-400">{title}</p>
-      <p className="text-xl font-bold mt-0.5">{value}</p>
-      {subtitle ? <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">{subtitle}</p> : null}
-      {progress !== undefined ? (
-        <div className="mt-2 h-1.5 rounded-full bg-black/10 dark:bg-white/10 overflow-hidden">
-          <div className="h-1.5 rounded-full bg-current transition-all" style={{ width: `${Math.min(100, progress * 100)}%` }} />
+      <div className="flex items-center gap-2 mb-2">
+        <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${gradient}`}>
+          <Icon size={15} className="text-white" />
         </div>
-      ) : null}
+        <p className="text-[10px] uppercase tracking-[0.08em] font-bold text-slate-500 dark:text-slate-400">{title}</p>
+      </div>
+      <p className="text-2xl font-black text-slate-900 dark:text-white tracking-tight">{value}</p>
+      {subtitle ? <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">{subtitle}</p> : null}
+      {progress !== undefined && (
+        <div className="mt-3 h-1.5 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+          <div className={`h-full rounded-full transition-all duration-700 ${gradient}`} style={{ width: `${Math.min(100, progress * 100)}%` }} />
+        </div>
+      )}
     </>
   );
 
   if (onClick) {
     return (
-      <button onClick={onClick} className={`${cardClass} cursor-pointer hover:shadow-md transition-shadow text-left`}>
+      <button
+        onClick={onClick}
+        className={`${cardClass} text-left appearance-none`}
+        style={{ animationDelay: `${delay}ms` }}
+      >
         {body}
       </button>
     );
   }
 
-  return <div className={cardClass}>{body}</div>;
+  return (
+    <div className={cardClass} style={{ animationDelay: `${delay}ms` }}>
+      {body}
+    </div>
+  );
 });
 
 interface QuickActionsProps {
@@ -56,9 +69,12 @@ interface QuickActionsProps {
   dailyQuestionsTarget: number;
   reviewsDueCount: number;
   overdueDeadlinesCount: number;
-  todayStudyMinutes: number;
   weeklyQuestionsMade: number;
   weeklyQuestionsDelta: number;
+  weeklyReviews: number;
+  weeklyReviewTarget: number;
+  weeklyEssays: number;
+  weeklyEssayTarget: number;
   onOpenReviews: () => void;
 }
 
@@ -67,23 +83,64 @@ export function QuickActions({
   dailyQuestionsTarget,
   reviewsDueCount,
   overdueDeadlinesCount,
-  todayStudyMinutes,
   weeklyQuestionsMade,
   weeklyQuestionsDelta,
+  weeklyReviews,
+  weeklyReviewTarget,
+  weeklyEssays,
+  weeklyEssayTarget,
   onOpenReviews,
 }: QuickActionsProps) {
   return (
-    <section className="flex gap-3 overflow-x-auto pb-2 [scrollbar-width:thin]">
+    <section className="flex gap-3 overflow-x-auto pb-2 scrollbar-thin">
       <QuickCard
         title="Meta diaria"
         value={`${todayQuestionsMade}/${dailyQuestionsTarget}`}
         progress={todayQuestionsMade / Math.max(1, dailyQuestionsTarget)}
-        color="cyan"
+        icon={Target}
+        gradient="bg-gradient-to-br from-cyan-500 to-cyan-600"
+        delay={50}
       />
-      <QuickCard title="Revisoes pendentes" value={reviewsDueCount} onClick={onOpenReviews} color="indigo" urgent={reviewsDueCount > 5} />
-      <QuickCard title="Prazos vencidos" value={overdueDeadlinesCount} color="red" urgent={overdueDeadlinesCount > 0} />
-      <QuickCard title="Tempo hoje" value={`${todayStudyMinutes} min`} color="emerald" />
-      <QuickCard title="Semana" value={`${weeklyQuestionsMade} questoes`} subtitle={`${weeklyQuestionsDelta >= 0 ? '+' : ''}${weeklyQuestionsDelta} vs anterior`} color="violet" />
+      <QuickCard
+        title="Revisoes pendentes"
+        value={reviewsDueCount}
+        onClick={onOpenReviews}
+        icon={RotateCcw}
+        gradient="bg-gradient-to-br from-indigo-500 to-indigo-600"
+        delay={100}
+      />
+      <QuickCard
+        title="Prazos vencidos"
+        value={overdueDeadlinesCount}
+        icon={AlertTriangle}
+        gradient="bg-gradient-to-br from-red-500 to-rose-600"
+        urgent={overdueDeadlinesCount > 0}
+        delay={150}
+      />
+      <QuickCard
+        title="Revisoes semana"
+        value={`${weeklyReviews}/${weeklyReviewTarget}`}
+        progress={weeklyReviews / Math.max(1, weeklyReviewTarget)}
+        icon={Brain}
+        gradient="bg-gradient-to-br from-emerald-500 to-emerald-600"
+        delay={200}
+      />
+      <QuickCard
+        title="Redacoes semana"
+        value={`${weeklyEssays}/${weeklyEssayTarget}`}
+        progress={weeklyEssays / Math.max(1, weeklyEssayTarget)}
+        icon={FileText}
+        gradient="bg-gradient-to-br from-fuchsia-500 to-pink-600"
+        delay={225}
+      />
+      <QuickCard
+        title="Semana"
+        value={`${weeklyQuestionsMade} questoes`}
+        subtitle={`${weeklyQuestionsDelta >= 0 ? '+' : ''}${weeklyQuestionsDelta} vs anterior`}
+        icon={BarChart3}
+        gradient="bg-gradient-to-br from-violet-500 to-violet-600"
+        delay={250}
+      />
     </section>
   );
 }
